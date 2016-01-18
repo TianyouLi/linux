@@ -513,7 +513,7 @@ static void skip_emulated_instruction(struct kvm_vcpu *vcpu)
 	struct vcpu_svm *svm = to_svm(vcpu);
 
 	if (svm->vmcb->control.next_rip != 0) {
-		WARN_ON(!static_cpu_has(X86_FEATURE_NRIPS));
+		WARN_ON_ONCE(!static_cpu_has(X86_FEATURE_NRIPS));
 		svm->next_rip = svm->vmcb->control.next_rip;
 	}
 
@@ -865,64 +865,6 @@ static void svm_disable_lbrv(struct vcpu_svm *svm)
 	set_msr_interception(msrpm, MSR_IA32_LASTINTTOIP, 0, 0);
 }
 
-#define MTRR_TYPE_UC_MINUS	7
-#define MTRR2PROTVAL_INVALID 0xff
-
-static u8 mtrr2protval[8];
-
-static u8 fallback_mtrr_type(int mtrr)
-{
-	/*
-	 * WT and WP aren't always available in the host PAT.  Treat
-	 * them as UC and UC- respectively.  Everything else should be
-	 * there.
-	 */
-	switch (mtrr)
-	{
-	case MTRR_TYPE_WRTHROUGH:
-		return MTRR_TYPE_UNCACHABLE;
-	case MTRR_TYPE_WRPROT:
-		return MTRR_TYPE_UC_MINUS;
-	default:
-		BUG();
-	}
-}
-
-static void build_mtrr2protval(void)
-{
-	int i;
-	u64 pat;
-
-	for (i = 0; i < 8; i++)
-		mtrr2protval[i] = MTRR2PROTVAL_INVALID;
-
-	/* Ignore the invalid MTRR types.  */
-	mtrr2protval[2] = 0;
-	mtrr2protval[3] = 0;
-
-	/*
-	 * Use host PAT value to figure out the mapping from guest MTRR
-	 * values to nested page table PAT/PCD/PWT values.  We do not
-	 * want to change the host PAT value every time we enter the
-	 * guest.
-	 */
-	rdmsrl(MSR_IA32_CR_PAT, pat);
-	for (i = 0; i < 8; i++) {
-		u8 mtrr = pat >> (8 * i);
-
-		if (mtrr2protval[mtrr] == MTRR2PROTVAL_INVALID)
-			mtrr2protval[mtrr] = __cm_idx2pte(i);
-	}
-
-	for (i = 0; i < 8; i++) {
-		if (mtrr2protval[i] == MTRR2PROTVAL_INVALID) {
-			u8 fallback = fallback_mtrr_type(i);
-			mtrr2protval[i] = mtrr2protval[fallback];
-			BUG_ON(mtrr2protval[i] == MTRR2PROTVAL_INVALID);
-		}
-	}
-}
-
 static __init int svm_hardware_setup(void)
 {
 	int cpu;
@@ -989,7 +931,6 @@ static __init int svm_hardware_setup(void)
 	} else
 		kvm_disable_tdp();
 
-	build_mtrr2protval();
 	return 0;
 
 err:
@@ -1144,39 +1085,6 @@ static u64 svm_compute_tsc_offset(struct kvm_vcpu *vcpu, u64 target_tsc)
 	return target_tsc - tsc;
 }
 
-static void svm_set_guest_pat(struct vcpu_svm *svm, u64 *g_pat)
-{
-	struct kvm_vcpu *vcpu = &svm->vcpu;
-
-	/* Unlike Intel, AMD takes the guest's CR0.CD into account.
-	 *
-	 * AMD does not have IPAT.  To emulate it for the case of guests
-	 * with no assigned devices, just set everything to WB.  If guests
-	 * have assigned devices, however, we cannot force WB for RAM
-	 * pages only, so use the guest PAT directly.
-	 */
-	if (!kvm_arch_has_assigned_device(vcpu->kvm))
-		*g_pat = 0x0606060606060606;
-	else
-		*g_pat = vcpu->arch.pat;
-}
-
-static u64 svm_get_mt_mask(struct kvm_vcpu *vcpu, gfn_t gfn, bool is_mmio)
-{
-	u8 mtrr;
-
-	/*
-	 * 1. MMIO: trust guest MTRR, so same as item 3.
-	 * 2. No passthrough: always map as WB, and force guest PAT to WB as well
-	 * 3. Passthrough: can't guarantee the result, try to trust guest.
-	 */
-	if (!is_mmio && !kvm_arch_has_assigned_device(vcpu->kvm))
-		return 0;
-
-	mtrr = kvm_mtrr_get_guest_memory_type(vcpu, gfn);
-	return mtrr2protval[mtrr];
-}
-
 static void init_vmcb(struct vcpu_svm *svm, bool init_event)
 {
 	struct vmcb_control_area *control = &svm->vmcb->control;
@@ -1198,6 +1106,8 @@ static void init_vmcb(struct vcpu_svm *svm, bool init_event)
 	set_exception_intercept(svm, PF_VECTOR);
 	set_exception_intercept(svm, UD_VECTOR);
 	set_exception_intercept(svm, MC_VECTOR);
+	set_exception_intercept(svm, AC_VECTOR);
+	set_exception_intercept(svm, DB_VECTOR);
 
 	set_intercept(svm, INTERCEPT_INTR);
 	set_intercept(svm, INTERCEPT_NMI);
@@ -1260,6 +1170,7 @@ static void init_vmcb(struct vcpu_svm *svm, bool init_event)
 	 * It also updates the guest-visible cr0 value.
 	 */
 	(void)kvm_set_cr0(&svm->vcpu, X86_CR0_NW | X86_CR0_CD | X86_CR0_ET);
+	kvm_mmu_reset_context(&svm->vcpu);
 
 	save->cr4 = X86_CR4_PAE;
 	/* rdx = ?? */
@@ -1272,7 +1183,6 @@ static void init_vmcb(struct vcpu_svm *svm, bool init_event)
 		clr_cr_intercept(svm, INTERCEPT_CR3_READ);
 		clr_cr_intercept(svm, INTERCEPT_CR3_WRITE);
 		save->g_pat = svm->vcpu.arch.pat;
-		svm_set_guest_pat(svm, &save->g_pat);
 		save->cr3 = 0;
 		save->cr4 = 0;
 	}
@@ -1733,20 +1643,13 @@ static void svm_set_segment(struct kvm_vcpu *vcpu,
 	mark_dirty(svm->vmcb, VMCB_SEG);
 }
 
-static void update_db_bp_intercept(struct kvm_vcpu *vcpu)
+static void update_bp_intercept(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_svm *svm = to_svm(vcpu);
 
-	clr_exception_intercept(svm, DB_VECTOR);
 	clr_exception_intercept(svm, BP_VECTOR);
 
-	if (svm->nmi_singlestep)
-		set_exception_intercept(svm, DB_VECTOR);
-
 	if (vcpu->guest_debug & KVM_GUESTDBG_ENABLE) {
-		if (vcpu->guest_debug &
-		    (KVM_GUESTDBG_SINGLESTEP | KVM_GUESTDBG_USE_HW_BP))
-			set_exception_intercept(svm, DB_VECTOR);
 		if (vcpu->guest_debug & KVM_GUESTDBG_USE_SW_BP)
 			set_exception_intercept(svm, BP_VECTOR);
 	} else
@@ -1852,7 +1755,6 @@ static int db_interception(struct vcpu_svm *svm)
 		if (!(svm->vcpu.guest_debug & KVM_GUESTDBG_SINGLESTEP))
 			svm->vmcb->save.rflags &=
 				~(X86_EFLAGS_TF | X86_EFLAGS_RF);
-		update_db_bp_intercept(&svm->vcpu);
 	}
 
 	if (svm->vcpu.guest_debug &
@@ -1884,6 +1786,12 @@ static int ud_interception(struct vcpu_svm *svm)
 	er = emulate_instruction(&svm->vcpu, EMULTYPE_TRAP_UD);
 	if (er != EMULATE_DONE)
 		kvm_queue_exception(&svm->vcpu, UD_VECTOR);
+	return 1;
+}
+
+static int ac_interception(struct vcpu_svm *svm)
+{
+	kvm_queue_exception_e(&svm->vcpu, AC_VECTOR, 0);
 	return 1;
 }
 
@@ -3347,16 +3255,6 @@ static int svm_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr)
 	case MSR_VM_IGNNE:
 		vcpu_unimpl(vcpu, "unimplemented wrmsr: 0x%x data 0x%llx\n", ecx, data);
 		break;
-	case MSR_IA32_CR_PAT:
-		if (npt_enabled) {
-			if (!kvm_mtrr_valid(vcpu, MSR_IA32_CR_PAT, data))
-				return 1;
-			vcpu->arch.pat = data;
-			svm_set_guest_pat(svm, &svm->vmcb->save.g_pat);
-			mark_dirty(svm->vmcb, VMCB_NPT);
-			break;
-		}
-		/* fall through */
 	default:
 		return kvm_set_msr_common(vcpu, msr);
 	}
@@ -3471,6 +3369,7 @@ static int (*const svm_exit_handlers[])(struct vcpu_svm *svm) = {
 	[SVM_EXIT_EXCP_BASE + PF_VECTOR]	= pf_interception,
 	[SVM_EXIT_EXCP_BASE + NM_VECTOR]	= nm_interception,
 	[SVM_EXIT_EXCP_BASE + MC_VECTOR]	= mc_interception,
+	[SVM_EXIT_EXCP_BASE + AC_VECTOR]	= ac_interception,
 	[SVM_EXIT_INTR]				= intr_interception,
 	[SVM_EXIT_NMI]				= nmi_interception,
 	[SVM_EXIT_SMI]				= nop_on_interception,
@@ -3854,7 +3753,6 @@ static void enable_nmi_window(struct kvm_vcpu *vcpu)
 	 */
 	svm->nmi_singlestep = true;
 	svm->vmcb->save.rflags |= (X86_EFLAGS_TF | X86_EFLAGS_RF);
-	update_db_bp_intercept(vcpu);
 }
 
 static int svm_set_tss_addr(struct kvm *kvm, unsigned int addr)
@@ -4191,6 +4089,11 @@ static bool svm_has_high_real_mode_segbase(void)
 	return true;
 }
 
+static u64 svm_get_mt_mask(struct kvm_vcpu *vcpu, gfn_t gfn, bool is_mmio)
+{
+	return 0;
+}
+
 static void svm_cpuid_update(struct kvm_vcpu *vcpu)
 {
 }
@@ -4471,7 +4374,7 @@ static struct kvm_x86_ops svm_x86_ops = {
 	.vcpu_load = svm_vcpu_load,
 	.vcpu_put = svm_vcpu_put,
 
-	.update_db_bp_intercept = update_db_bp_intercept,
+	.update_db_bp_intercept = update_bp_intercept,
 	.get_msr = svm_get_msr,
 	.set_msr = svm_set_msr,
 	.get_segment_base = svm_get_segment_base,

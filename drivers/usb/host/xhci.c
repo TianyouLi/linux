@@ -146,7 +146,8 @@ static int xhci_start(struct xhci_hcd *xhci)
 				"waited %u microseconds.\n",
 				XHCI_MAX_HALT_USEC);
 	if (!ret)
-		xhci->xhc_state &= ~XHCI_STATE_HALTED;
+		xhci->xhc_state &= ~(XHCI_STATE_HALTED | XHCI_STATE_DYING);
+
 	return ret;
 }
 
@@ -173,6 +174,16 @@ int xhci_reset(struct xhci_hcd *xhci)
 	command = readl(&xhci->op_regs->command);
 	command |= CMD_RESET;
 	writel(command, &xhci->op_regs->command);
+
+	/* Existing Intel xHCI controllers require a delay of 1 mS,
+	 * after setting the CMD_RESET bit, and before accessing any
+	 * HC registers. This allows the HC to complete the
+	 * reset operation and be ready for HC register access.
+	 * Without this delay, the subsequent HC register access,
+	 * may result in a system hang very rarely.
+	 */
+	if (xhci->quirks & XHCI_INTEL_HOST)
+		udelay(1000);
 
 	ret = xhci_handshake(&xhci->op_regs->command,
 			CMD_RESET, 0, 10 * 1000 * 1000);
@@ -654,15 +665,6 @@ int xhci_run(struct usb_hcd *hcd)
 }
 EXPORT_SYMBOL_GPL(xhci_run);
 
-static void xhci_only_stop_hcd(struct usb_hcd *hcd)
-{
-	struct xhci_hcd *xhci = hcd_to_xhci(hcd);
-
-	spin_lock_irq(&xhci->lock);
-	xhci_halt(xhci);
-	spin_unlock_irq(&xhci->lock);
-}
-
 /*
  * Stop xHCI driver.
  *
@@ -677,12 +679,14 @@ void xhci_stop(struct usb_hcd *hcd)
 	u32 temp;
 	struct xhci_hcd *xhci = hcd_to_xhci(hcd);
 
-	if (!usb_hcd_is_primary_hcd(hcd)) {
-		xhci_only_stop_hcd(xhci->shared_hcd);
+	if (xhci->xhc_state & XHCI_STATE_HALTED)
 		return;
-	}
 
+	mutex_lock(&xhci->mutex);
 	spin_lock_irq(&xhci->lock);
+	xhci->xhc_state |= XHCI_STATE_HALTED;
+	xhci->cmd_ring_state = CMD_RING_STATE_STOPPED;
+
 	/* Make sure the xHC is halted for a USB3 roothub
 	 * (xhci_stop() could be called as part of failed init).
 	 */
@@ -717,6 +721,7 @@ void xhci_stop(struct usb_hcd *hcd)
 	xhci_dbg_trace(xhci, trace_xhci_dbg_init,
 			"xhci_stop completed - status = %x",
 			readl(&xhci->op_regs->status));
+	mutex_unlock(&xhci->mutex);
 }
 
 /*
@@ -1340,6 +1345,11 @@ int xhci_urb_enqueue(struct usb_hcd *hcd, struct urb *urb, gfp_t mem_flags)
 
 	if (usb_endpoint_xfer_isoc(&urb->ep->desc))
 		size = urb->number_of_packets;
+	else if (usb_endpoint_is_bulk_out(&urb->ep->desc) &&
+	    urb->transfer_buffer_length > 0 &&
+	    urb->transfer_flags & URB_ZERO_PACKET &&
+	    !(urb->transfer_buffer_length % usb_endpoint_maxp(&urb->ep->desc)))
+		size = 2;
 	else
 		size = 1;
 
@@ -3787,6 +3797,9 @@ static int xhci_setup_device(struct usb_hcd *hcd, struct usb_device *udev,
 	struct xhci_command *command = NULL;
 
 	mutex_lock(&xhci->mutex);
+
+	if (xhci->xhc_state)	/* dying or halted */
+		goto out;
 
 	if (!udev->slot_id) {
 		xhci_dbg_trace(xhci, trace_xhci_dbg_address,

@@ -260,24 +260,31 @@ static inline void update_turbo_state(void)
 		 cpu->pstate.max_pstate == cpu->pstate.turbo_pstate);
 }
 
-#define PCT_TO_HWP(x) (x * 255 / 100)
 static void intel_pstate_hwp_set(void)
 {
-	int min, max, cpu;
-	u64 value, freq;
+	int min, hw_min, max, hw_max, cpu, range, adj_range;
+	u64 value, cap;
+
+	rdmsrl(MSR_HWP_CAPABILITIES, cap);
+	hw_min = HWP_LOWEST_PERF(cap);
+	hw_max = HWP_HIGHEST_PERF(cap);
+	range = hw_max - hw_min;
 
 	get_online_cpus();
 
 	for_each_online_cpu(cpu) {
 		rdmsrl_on_cpu(cpu, MSR_HWP_REQUEST, &value);
-		min = PCT_TO_HWP(limits.min_perf_pct);
+		adj_range = limits.min_perf_pct * range / 100;
+		min = hw_min + adj_range;
 		value &= ~HWP_MIN_PERF(~0L);
 		value |= HWP_MIN_PERF(min);
 
-		max = PCT_TO_HWP(limits.max_perf_pct);
+		adj_range = limits.max_perf_pct * range / 100;
+		max = hw_min + adj_range;
 		if (limits.no_turbo) {
-			rdmsrl( MSR_HWP_CAPABILITIES, freq);
-			max = HWP_GUARANTEED_PERF(freq);
+			hw_max = HWP_GUARANTEED_PERF(cap);
+			if (hw_max < max)
+				max = hw_max;
 		}
 
 		value &= ~HWP_MAX_PERF(~0L);
@@ -484,12 +491,11 @@ static void __init intel_pstate_sysfs_expose_params(void)
 }
 /************************** sysfs end ************************/
 
-static void intel_pstate_hwp_enable(void)
+static void intel_pstate_hwp_enable(struct cpudata *cpudata)
 {
-	hwp_active++;
 	pr_info("intel_pstate: HWP enabled\n");
 
-	wrmsrl( MSR_PM_ENABLE, 0x1);
+	wrmsrl_on_cpu(cpudata->cpu, MSR_PM_ENABLE, 0x1);
 }
 
 static int byt_get_min_pstate(void)
@@ -522,7 +528,7 @@ static void byt_set_pstate(struct cpudata *cpudata, int pstate)
 	int32_t vid_fp;
 	u32 vid;
 
-	val = pstate << 8;
+	val = (u64)pstate << 8;
 	if (limits.no_turbo && !limits.turbo_disabled)
 		val |= (u64)1 << 32;
 
@@ -611,7 +617,7 @@ static void core_set_pstate(struct cpudata *cpudata, int pstate)
 {
 	u64 val;
 
-	val = pstate << 8;
+	val = (u64)pstate << 8;
 	if (limits.no_turbo && !limits.turbo_disabled)
 		val |= (u64)1 << 32;
 
@@ -766,6 +772,11 @@ static inline void intel_pstate_sample(struct cpudata *cpu)
 	local_irq_save(flags);
 	rdmsrl(MSR_IA32_APERF, aperf);
 	rdmsrl(MSR_IA32_MPERF, mperf);
+	if (cpu->prev_mperf == mperf) {
+		local_irq_restore(flags);
+		return;
+	}
+
 	tsc = native_read_tsc();
 	local_irq_restore(flags);
 
@@ -909,6 +920,7 @@ static const struct x86_cpu_id intel_pstate_cpu_ids[] = {
 	ICPU(0x4c, byt_params),
 	ICPU(0x4e, core_params),
 	ICPU(0x4f, core_params),
+	ICPU(0x5e, core_params),
 	ICPU(0x56, core_params),
 	ICPU(0x57, knl_params),
 	{}
@@ -933,6 +945,10 @@ static int intel_pstate_init_cpu(unsigned int cpunum)
 	cpu = all_cpu_data[cpunum];
 
 	cpu->cpu = cpunum;
+
+	if (hwp_active)
+		intel_pstate_hwp_enable(cpu);
+
 	intel_pstate_get_cpu_pstates(cpu);
 
 	init_timer_deferrable(&cpu->timer);
@@ -1066,6 +1082,7 @@ static struct cpufreq_driver intel_pstate_driver = {
 static int __initdata no_load;
 static int __initdata no_hwp;
 static int __initdata hwp_only;
+static int __initdata skylake_hwp;
 static unsigned int force_load;
 
 static int intel_pstate_msrs_not_valid(void)
@@ -1245,8 +1262,9 @@ static int __init intel_pstate_init(void)
 	if (!all_cpu_data)
 		return -ENOMEM;
 
-	if (static_cpu_has_safe(X86_FEATURE_HWP) && !no_hwp)
-		intel_pstate_hwp_enable();
+	if (static_cpu_has_safe(X86_FEATURE_HWP) && !no_hwp
+		&& (id->model != 0x5e || skylake_hwp))
+		hwp_active++;
 
 	if (!hwp_active && hwp_only)
 		goto out;
@@ -1287,6 +1305,8 @@ static int __init intel_pstate_setup(char *str)
 		force_load = 1;
 	if (!strcmp(str, "hwp_only"))
 		hwp_only = 1;
+	if (!strcmp(str, "skylake_hwp"))
+		skylake_hwp = 1;
 	return 0;
 }
 early_param("intel_pstate", intel_pstate_setup);

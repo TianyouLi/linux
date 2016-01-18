@@ -196,7 +196,7 @@ int kvm_vm_ioctl_check_extension(struct kvm *kvm, long ext)
 		r = KVM_MAX_VCPUS;
 		break;
 	default:
-		r = kvm_arch_dev_ioctl_check_extension(ext);
+		r = kvm_arch_dev_ioctl_check_extension(kvm, ext);
 		break;
 	}
 	return r;
@@ -449,7 +449,7 @@ static int kvm_vcpu_first_run_init(struct kvm_vcpu *vcpu)
 	 * Map the VGIC hardware resources before running a vcpu the first
 	 * time on this VM.
 	 */
-	if (unlikely(!vgic_ready(kvm))) {
+	if (unlikely(irqchip_in_kernel(kvm) && !vgic_ready(kvm))) {
 		ret = kvm_vgic_map_resources(kvm);
 		if (ret)
 			return ret;

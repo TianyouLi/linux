@@ -72,6 +72,7 @@ config ARM64
 	select HAVE_PERF_USER_STACK_DUMP
 	select HAVE_RCU_TABLE_FREE
 	select HAVE_SYSCALL_TRACEPOINTS
+	select HAVE_MEMBLOCK_NODE_MAP if NUMA
 	select IRQ_DOMAIN
 	select IRQ_FORCED_THREADING
 	select MODULES_USE_ELF_RELA
@@ -103,6 +104,10 @@ config NO_IOPORT_MAP
 
 config STACKTRACE_SUPPORT
 	def_bool y
+
+config ILLEGAL_POINTER_VALUE
+	hex
+	default 0xdead000000000000
 
 config LOCKDEP_SUPPORT
 	def_bool y
@@ -417,6 +422,49 @@ config ARM64_ERRATUM_845719
 
 	  If unsure, say Y.
 
+config ARM64_ERRATUM_843419
+	bool "Cortex-A53: 843419: A load or store might access an incorrect address"
+	depends on MODULES
+	default y
+	help
+	  This option builds kernel modules using the large memory model in
+	  order to avoid the use of the ADRP instruction, which can cause
+	  a subsequent memory access to use an incorrect address on Cortex-A53
+	  parts up to r0p4.
+
+	  Note that the kernel itself must be linked with a version of ld
+	  which fixes potentially affected ADRP instructions through the
+	  use of veneers.
+
+	  If unsure, say Y.
+
+config CAVIUM_ERRATUM_22375
+	bool "Cavium erratum 22375, 24313"
+	default y
+	help
+	  Enable workaround for erratum 22375, 24313.
+
+	  This implements two gicv3-its errata workarounds for ThunderX. Both
+	  with small impact affecting only ITS table allocation.
+
+	    erratum 22375: only alloc 8MB table size
+	    erratum 24313: ignore memory access type
+
+	  The fixes are in ITS initialization and basically ignore memory access
+	  type and table size provided by the TYPER and BASER registers.
+
+	  If unsure, say Y.
+
+config CAVIUM_ERRATUM_23154
+	bool "Cavium erratum 23154: Access to ICC_IAR1_EL1 is not sync'ed"
+	default y
+	help
+	  The gicv3 of ThunderX requires a modified version for
+	  reading the IAR status to ensure data synchronization
+	  (access to icc_iar1_el1 is not sync'ed before and after).
+
+	  If unsure, say Y.
+
 endmenu
 
 
@@ -516,6 +564,37 @@ config HOTPLUG_CPU
 	help
 	  Say Y here to experiment with turning CPUs off and on.  CPUs
 	  can be controlled through /sys/devices/system/cpu.
+
+# Common NUMA Features
+config NUMA
+	bool "Numa Memory Allocation and Scheduler Support"
+	depends on SMP
+	help
+	  Enable NUMA (Non Uniform Memory Access) support.
+
+	  The kernel will try to allocate memory used by a CPU on the
+	  local memory controller of the CPU and add some more
+	  NUMA awareness to the kernel.
+
+config ARM64_DT_NUMA
+	bool "Device Tree NUMA support"
+	depends on NUMA
+	help
+	  Enable Device Tree NUMA support.
+
+config NODES_SHIFT
+	int "Maximum NUMA Nodes (as a power of 2)"
+	range 1 10
+	default "2"
+	depends on NEED_MULTIPLE_NODES
+	help
+	  Specify the maximum number of NUMA Nodes available on the target
+	  system.  Increases memory reserved to accommodate various tables.
+
+config USE_PERCPU_NUMA_NODE_ID
+	def_bool y
+	depends on NUMA
+
 
 source kernel/Kconfig.preempt
 
@@ -766,6 +845,8 @@ endmenu
 source "net/Kconfig"
 
 source "drivers/Kconfig"
+
+source "ubuntu/Kconfig"
 
 source "drivers/firmware/Kconfig"
 

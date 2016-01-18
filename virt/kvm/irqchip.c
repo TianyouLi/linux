@@ -29,7 +29,9 @@
 #include <linux/srcu.h>
 #include <linux/export.h>
 #include <trace/events/kvm.h>
+#if !defined(CONFIG_ARM) && !defined(CONFIG_ARM64)
 #include "irq.h"
+#endif
 
 struct kvm_irq_routing_table {
 	int chip[KVM_NR_IRQCHIPS][KVM_IRQCHIP_NUM_PINS];
@@ -72,12 +74,14 @@ int kvm_send_userspace_msi(struct kvm *kvm, struct kvm_msi *msi)
 {
 	struct kvm_kernel_irq_routing_entry route;
 
-	if (!irqchip_in_kernel(kvm) || msi->flags != 0)
+	if (!irqchip_in_kernel(kvm) || (msi->flags & ~KVM_MSI_VALID_DEVID))
 		return -EINVAL;
 
 	route.msi.address_lo = msi->address_lo;
 	route.msi.address_hi = msi->address_hi;
 	route.msi.data = msi->data;
+	route.flags = msi->flags;
+	route.devid = msi->devid;
 
 	return kvm_set_msi(&route, kvm, KVM_USERSPACE_IRQ_SOURCE_ID, 1, false);
 }
@@ -213,11 +217,15 @@ int kvm_set_irq_routing(struct kvm *kvm,
 			goto out;
 
 		r = -EINVAL;
-		if (ue->flags)
+		if (ue->flags & ~KVM_MSI_VALID_DEVID) {
+			kfree(e);
 			goto out;
+		}
 		r = setup_routing_entry(new, e, ue);
-		if (r)
+		if (r) {
+			kfree(e);
 			goto out;
+		}
 		++ue;
 	}
 

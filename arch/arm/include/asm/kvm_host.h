@@ -29,12 +29,6 @@
 
 #define __KVM_HAVE_ARCH_INTC_INITIALIZED
 
-#if defined(CONFIG_KVM_ARM_MAX_VCPUS)
-#define KVM_MAX_VCPUS CONFIG_KVM_ARM_MAX_VCPUS
-#else
-#define KVM_MAX_VCPUS 0
-#endif
-
 #define KVM_USER_MEM_SLOTS 32
 #define KVM_PRIVATE_MEM_SLOTS 4
 #define KVM_COALESCED_MMIO_PAGE_OFFSET 1
@@ -42,7 +36,11 @@
 
 #define KVM_VCPU_MAX_FEATURES 2
 
+#define KVM_IRQCHIP_NUM_PINS 988 /* 1020 - 32 is the number of SPI */
+
 #include <kvm/arm_vgic.h>
+
+#define KVM_MAX_VCPUS VGIC_V2_MAX_CPUS
 
 u32 *kvm_vcpu_reg(struct kvm_vcpu *vcpu, u8 reg_num, u32 mode);
 int __attribute_const__ kvm_target_cpu(void);
@@ -213,7 +211,7 @@ static inline void __cpu_init_hyp_mode(phys_addr_t boot_pgd_ptr,
 	kvm_call_hyp((void*)hyp_stack_ptr, vector_ptr, pgd_ptr);
 }
 
-static inline int kvm_arch_dev_ioctl_check_extension(long ext)
+static inline int kvm_arch_dev_ioctl_check_extension(struct kvm *kvm, long ext)
 {
 	return 0;
 }

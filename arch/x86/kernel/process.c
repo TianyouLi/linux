@@ -29,6 +29,7 @@
 #include <asm/debugreg.h>
 #include <asm/nmi.h>
 #include <asm/tlbflush.h>
+#include <asm/vm86.h>
 
 /*
  * per-CPU TSS segments. Threads are completely 'soft' on Linux,
@@ -82,6 +83,9 @@ EXPORT_SYMBOL_GPL(idle_notifier_unregister);
 int arch_dup_task_struct(struct task_struct *dst, struct task_struct *src)
 {
 	memcpy(dst, src, arch_task_struct_size);
+#ifdef CONFIG_VM86
+	dst->thread.vm86 = NULL;
+#endif
 
 	return fpu__copy(&dst->thread.fpu, &src->thread.fpu);
 }
@@ -109,6 +113,8 @@ void exit_thread(void)
 		put_cpu();
 		kfree(bp);
 	}
+
+	free_vm86(t);
 
 	fpu__drop(fpu);
 }

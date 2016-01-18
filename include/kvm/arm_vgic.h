@@ -25,6 +25,7 @@
 #include <linux/spinlock.h>
 #include <linux/types.h>
 #include <kvm/iodev.h>
+#include <linux/list.h>
 
 #define VGIC_NR_IRQS_LEGACY	256
 #define VGIC_NR_SGIS		16
@@ -35,11 +36,7 @@
 #define VGIC_V3_MAX_LRS		16
 #define VGIC_MAX_IRQS		1024
 #define VGIC_V2_MAX_CPUS	8
-
-/* Sanity checks... */
-#if (KVM_MAX_VCPUS > 255)
-#error Too many KVM VCPUs, the VGIC only supports up to 255 VCPUs for now
-#endif
+#define VGIC_V3_MAX_CPUS	255
 
 #if (VGIC_NR_IRQS_LEGACY & 31)
 #error "VGIC_NR_IRQS must be a multiple of 32"
@@ -144,7 +141,11 @@ struct vgic_vm_ops {
 	bool	(*queue_sgi)(struct kvm_vcpu *, int irq);
 	void	(*add_sgi_source)(struct kvm_vcpu *, int irq, int source);
 	int	(*init_model)(struct kvm *);
+	void	(*destroy_model)(struct kvm *);
 	int	(*map_resources)(struct kvm *, const struct vgic_params *);
+	bool	(*queue_lpis)(struct kvm_vcpu *);
+	void	(*unqueue_lpi)(struct kvm_vcpu *, int irq);
+	int	(*inject_msi)(struct kvm *, struct kvm_msi *);
 };
 
 struct vgic_io_device {
@@ -155,6 +156,19 @@ struct vgic_io_device {
 	struct kvm_io_device dev;
 };
 
+struct vgic_its {
+	bool			enabled;
+	struct vgic_io_device	iodev;
+	spinlock_t		lock;
+	u64			cbaser;
+	int			creadr;
+	int			cwriter;
+	struct list_head	device_list;
+	struct list_head	collection_list;
+	/* memory used for buffering guest's memory */
+	void			*buffer_page;
+};
+
 struct vgic_dist {
 	spinlock_t		lock;
 	bool			in_kernel;
@@ -162,6 +176,9 @@ struct vgic_dist {
 
 	/* vGIC model the kernel emulates for the guest (GICv2 or GICv3) */
 	u32			vgic_model;
+
+	/* Do injected MSIs require an additional device ID? */
+	bool			msis_require_devid;
 
 	int			nr_cpus;
 	int			nr_irqs;
@@ -176,6 +193,9 @@ struct vgic_dist {
 		phys_addr_t		vgic_cpu_base;
 		phys_addr_t		vgic_redist_base;
 	};
+
+	/* The base address of the ITS control register frame */
+	phys_addr_t		vgic_its_base;
 
 	/* Distributor enabled */
 	u32			enabled;
@@ -252,6 +272,15 @@ struct vgic_dist {
 	struct vgic_vm_ops	vm_ops;
 	struct vgic_io_device	dist_iodev;
 	struct vgic_io_device	*redist_iodevs;
+
+	/* Address of LPI configuration table shared by all redistributors */
+	u64			propbaser;
+
+	/* Addresses of LPI pending tables per redistributor */
+	u64			*pendbaser;
+
+	bool			lpis_enabled;
+	struct vgic_its		its;
 };
 
 struct vgic_v2_cpu_if {
@@ -279,9 +308,6 @@ struct vgic_v3_cpu_if {
 };
 
 struct vgic_cpu {
-	/* per IRQ to LR mapping */
-	u8		*vgic_irq_lr_map;
-
 	/* Pending/active/both interrupts on this VCPU */
 	DECLARE_BITMAP(	pending_percpu, VGIC_NR_PRIVATE_IRQS);
 	DECLARE_BITMAP(	active_percpu, VGIC_NR_PRIVATE_IRQS);
@@ -291,9 +317,6 @@ struct vgic_cpu {
 	unsigned long	*pending_shared;
 	unsigned long   *active_shared;
 	unsigned long   *pend_act_shared;
-
-	/* Bitmap of used/free list registers */
-	DECLARE_BITMAP(	lr_used, VGIC_V2_MAX_LRS);
 
 	/* Number of list registers on this CPU */
 	int		nr_lr;

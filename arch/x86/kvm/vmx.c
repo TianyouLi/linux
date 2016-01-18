@@ -1567,7 +1567,7 @@ static void update_exception_bitmap(struct kvm_vcpu *vcpu)
 	u32 eb;
 
 	eb = (1u << PF_VECTOR) | (1u << UD_VECTOR) | (1u << MC_VECTOR) |
-	     (1u << NM_VECTOR) | (1u << DB_VECTOR);
+	     (1u << NM_VECTOR) | (1u << DB_VECTOR) | (1u << AC_VECTOR);
 	if ((vcpu->guest_debug &
 	     (KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_USE_SW_BP)) ==
 	    (KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_USE_SW_BP))
@@ -5146,6 +5146,13 @@ static int handle_exception(struct kvm_vcpu *vcpu)
 		kvm_run->debug.arch.pc = vmcs_readl(GUEST_CS_BASE) + rip;
 		kvm_run->debug.arch.exception = ex_no;
 		break;
+ 	case AC_VECTOR:
+ 		/*
+ 		 * We have already enabled interrupts and pre-emption, so
+		 * it's OK to loop here if that is what will happen.
+		 */
+		kvm_queue_exception_e(vcpu, AC_VECTOR, error_code);
+ 		return 1;
 	default:
 		kvm_run->exit_reason = KVM_EXIT_EXCEPTION;
 		kvm_run->ex.exception = ex_no;
@@ -6133,6 +6140,8 @@ static __init int hardware_setup(void)
 			vmx_msr_bitmap_legacy, PAGE_SIZE);
 	memcpy(vmx_msr_bitmap_longmode_x2apic,
 			vmx_msr_bitmap_longmode, PAGE_SIZE);
+
+	set_bit(0, vmx_vpid_bitmap); /* 0 is reserved for host */
 
 	if (enable_apicv) {
 		for (msr = 0x800; msr <= 0x8ff; msr++)
@@ -8632,17 +8641,22 @@ static u64 vmx_get_mt_mask(struct kvm_vcpu *vcpu, gfn_t gfn, bool is_mmio)
 	u64 ipat = 0;
 
 	/* For VT-d and EPT combination
-	 * 1. MMIO: guest may want to apply WC, trust it.
+	 * 1. MMIO: always map as UC
 	 * 2. EPT with VT-d:
 	 *   a. VT-d without snooping control feature: can't guarantee the
-	 *	result, try to trust guest.  So the same as item 1.
+	 *	result, try to trust guest.
 	 *   b. VT-d with snooping control feature: snooping control feature of
 	 *	VT-d engine can guarantee the cache correctness. Just set it
 	 *	to WB to keep consistent with host. So the same as item 3.
 	 * 3. EPT without VT-d: always map as WB and set IPAT=1 to keep
 	 *    consistent with host MTRR
 	 */
-	if (!is_mmio && !kvm_arch_has_noncoherent_dma(vcpu->kvm)) {
+	if (is_mmio) {
+		cache = MTRR_TYPE_UNCACHABLE;
+		goto exit;
+	}
+
+	if (!kvm_arch_has_noncoherent_dma(vcpu->kvm)) {
 		ipat = VMX_EPT_IPAT_BIT;
 		cache = MTRR_TYPE_WRBACK;
 		goto exit;

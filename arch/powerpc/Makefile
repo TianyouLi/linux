@@ -243,7 +243,7 @@ drivers-$(CONFIG_OPROFILE)	+= arch/powerpc/oprofile/
 all: zImage
 
 # With make 3.82 we cannot mix normal and wildcard targets
-BOOT_TARGETS1 := zImage zImage.initrd uImage
+BOOT_TARGETS1 := zImage zImage.initrd uImage vmlinux.strip
 BOOT_TARGETS2 := zImage% dtbImage% treeImage.% cuImage.% simpleImage.% uImage.%
 
 PHONY += $(BOOT_TARGETS1) $(BOOT_TARGETS2)
@@ -356,13 +356,6 @@ checkbin:
 		echo 'kernel with modules enabled.' ; \
 		echo -n '*** Please use a different GCC version or ' ; \
 		echo 'disable kernel modules' ; \
-		false ; \
-	fi
-	@if test "x${CONFIG_CPU_LITTLE_ENDIAN}" = "xy" \
-	    && $(LD) --version | head -1 | grep ' 2\.24$$' >/dev/null ; then \
-		echo -n '*** binutils 2.24 miscompiles weak symbols ' ; \
-		echo 'in some circumstances.' ; \
-		echo -n '*** Please use a different binutils version.' ; \
 		false ; \
 	fi
 

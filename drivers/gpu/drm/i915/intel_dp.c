@@ -48,28 +48,28 @@
 #define INTEL_DP_RESOLUTION_FAILSAFE	(3 << INTEL_DP_RESOLUTION_SHIFT_MASK)
 
 struct dp_link_dpll {
-	int link_bw;
+	int clock;
 	struct dpll dpll;
 };
 
 static const struct dp_link_dpll gen4_dpll[] = {
-	{ DP_LINK_BW_1_62,
+	{ 162000,
 		{ .p1 = 2, .p2 = 10, .n = 2, .m1 = 23, .m2 = 8 } },
-	{ DP_LINK_BW_2_7,
+	{ 270000,
 		{ .p1 = 1, .p2 = 10, .n = 1, .m1 = 14, .m2 = 2 } }
 };
 
 static const struct dp_link_dpll pch_dpll[] = {
-	{ DP_LINK_BW_1_62,
+	{ 162000,
 		{ .p1 = 2, .p2 = 10, .n = 1, .m1 = 12, .m2 = 9 } },
-	{ DP_LINK_BW_2_7,
+	{ 270000,
 		{ .p1 = 1, .p2 = 10, .n = 2, .m1 = 14, .m2 = 8 } }
 };
 
 static const struct dp_link_dpll vlv_dpll[] = {
-	{ DP_LINK_BW_1_62,
+	{ 162000,
 		{ .p1 = 3, .p2 = 2, .n = 5, .m1 = 3, .m2 = 81 } },
-	{ DP_LINK_BW_2_7,
+	{ 270000,
 		{ .p1 = 2, .p2 = 2, .n = 1, .m1 = 2, .m2 = 27 } }
 };
 
@@ -83,14 +83,16 @@ static const struct dp_link_dpll chv_dpll[] = {
 	 * m2 is stored in fixed point format using formula below
 	 * (m2_int << 22) | m2_fraction
 	 */
-	{ DP_LINK_BW_1_62,	/* m2_int = 32, m2_fraction = 1677722 */
+	{ 162000,	/* m2_int = 32, m2_fraction = 1677722 */
 		{ .p1 = 4, .p2 = 2, .n = 1, .m1 = 2, .m2 = 0x819999a } },
-	{ DP_LINK_BW_2_7,	/* m2_int = 27, m2_fraction = 0 */
+	{ 270000,	/* m2_int = 27, m2_fraction = 0 */
 		{ .p1 = 4, .p2 = 1, .n = 1, .m1 = 2, .m2 = 0x6c00000 } },
-	{ DP_LINK_BW_5_4,	/* m2_int = 27, m2_fraction = 0 */
+	{ 540000,	/* m2_int = 27, m2_fraction = 0 */
 		{ .p1 = 2, .p2 = 1, .n = 1, .m1 = 2, .m2 = 0x6c00000 } }
 };
 
+static const int bxt_rates[] = { 162000, 216000, 243000, 270000,
+				  324000, 432000, 540000 };
 static const int skl_rates[] = { 162000, 216000, 270000,
 				  324000, 432000, 540000 };
 static const int default_rates[] = { 162000, 270000, 540000 };
@@ -1016,10 +1018,33 @@ static void
 intel_dp_aux_init(struct intel_dp *intel_dp, struct intel_connector *connector)
 {
 	struct drm_device *dev = intel_dp_to_dev(intel_dp);
+	struct drm_i915_private *dev_priv = dev->dev_private;
 	struct intel_digital_port *intel_dig_port = dp_to_dig_port(intel_dp);
 	enum port port = intel_dig_port->port;
+	struct ddi_vbt_port_info *info = &dev_priv->vbt.ddi_port_info[port];
 	const char *name = NULL;
+	uint32_t porte_aux_ctl_reg = DPA_AUX_CH_CTL;
 	int ret;
+
+	/* On SKL we don't have Aux for port E so we rely on VBT to set
+	 * a proper alternate aux channel.
+	 */
+	if (IS_SKYLAKE(dev) && port == PORT_E) {
+		switch (info->alternate_aux_channel) {
+		case DP_AUX_B:
+			porte_aux_ctl_reg = DPB_AUX_CH_CTL;
+			break;
+		case DP_AUX_C:
+			porte_aux_ctl_reg = DPC_AUX_CH_CTL;
+			break;
+		case DP_AUX_D:
+			porte_aux_ctl_reg = DPD_AUX_CH_CTL;
+			break;
+		case DP_AUX_A:
+		default:
+			porte_aux_ctl_reg = DPA_AUX_CH_CTL;
+		}
+	}
 
 	switch (port) {
 	case PORT_A:
@@ -1038,6 +1063,10 @@ intel_dp_aux_init(struct intel_dp *intel_dp, struct intel_connector *connector)
 		intel_dp->aux_ch_ctl_reg = PCH_DPD_AUX_CH_CTL;
 		name = "DPDDC-D";
 		break;
+	case PORT_E:
+		intel_dp->aux_ch_ctl_reg = porte_aux_ctl_reg;
+		name = "DPDDC-E";
+		break;
 	default:
 		BUG();
 	}
@@ -1051,7 +1080,7 @@ intel_dp_aux_init(struct intel_dp *intel_dp, struct intel_connector *connector)
 	 *
 	 * Skylake moves AUX_CTL back next to DDI_BUF_CTL, on the CPU.
 	 */
-	if (!IS_HASWELL(dev) && !IS_BROADWELL(dev))
+	if (!IS_HASWELL(dev) && !IS_BROADWELL(dev) && port != PORT_E)
 		intel_dp->aux_ch_ctl_reg = intel_dp->output_reg + 0x10;
 
 	intel_dp->aux.name = name;
@@ -1089,7 +1118,7 @@ intel_dp_connector_unregister(struct intel_connector *intel_connector)
 }
 
 static void
-skl_edp_set_pll_config(struct intel_crtc_state *pipe_config, int link_clock)
+skl_edp_set_pll_config(struct intel_crtc_state *pipe_config)
 {
 	u32 ctrl1;
 
@@ -1101,7 +1130,7 @@ skl_edp_set_pll_config(struct intel_crtc_state *pipe_config, int link_clock)
 	pipe_config->dpll_hw_state.cfgcr2 = 0;
 
 	ctrl1 = DPLL_CTRL1_OVERRIDE(SKL_DPLL0);
-	switch (link_clock / 2) {
+	switch (pipe_config->port_clock / 2) {
 	case 81000:
 		ctrl1 |= DPLL_CTRL1_LINK_RATE(DPLL_CTRL1_LINK_RATE_810,
 					      SKL_DPLL0);
@@ -1134,20 +1163,20 @@ skl_edp_set_pll_config(struct intel_crtc_state *pipe_config, int link_clock)
 	pipe_config->dpll_hw_state.ctrl1 = ctrl1;
 }
 
-static void
-hsw_dp_set_ddi_pll_sel(struct intel_crtc_state *pipe_config, int link_bw)
+void
+hsw_dp_set_ddi_pll_sel(struct intel_crtc_state *pipe_config)
 {
 	memset(&pipe_config->dpll_hw_state, 0,
 	       sizeof(pipe_config->dpll_hw_state));
 
-	switch (link_bw) {
-	case DP_LINK_BW_1_62:
+	switch (pipe_config->port_clock / 2) {
+	case 81000:
 		pipe_config->ddi_pll_sel = PORT_CLK_SEL_LCPLL_810;
 		break;
-	case DP_LINK_BW_2_7:
+	case 135000:
 		pipe_config->ddi_pll_sel = PORT_CLK_SEL_LCPLL_1350;
 		break;
-	case DP_LINK_BW_5_4:
+	case 270000:
 		pipe_config->ddi_pll_sel = PORT_CLK_SEL_LCPLL_2700;
 		break;
 	}
@@ -1182,23 +1211,29 @@ static bool intel_dp_source_supports_hbr2(struct drm_device *dev)
 static int
 intel_dp_source_rates(struct drm_device *dev, const int **source_rates)
 {
-	if (IS_SKYLAKE(dev)) {
+	int size;
+
+	if (IS_BROXTON(dev)) {
+		*source_rates = bxt_rates;
+		size = ARRAY_SIZE(bxt_rates);
+	} else if (IS_SKYLAKE(dev)) {
 		*source_rates = skl_rates;
-		return ARRAY_SIZE(skl_rates);
+		size = ARRAY_SIZE(skl_rates);
+	} else {
+		*source_rates = default_rates;
+		size = ARRAY_SIZE(default_rates);
 	}
 
-	*source_rates = default_rates;
-
 	/* This depends on the fact that 5.4 is last value in the array */
-	if (intel_dp_source_supports_hbr2(dev))
-		return (DP_LINK_BW_5_4 >> 3) + 1;
-	else
-		return (DP_LINK_BW_2_7 >> 3) + 1;
+	if (!intel_dp_source_supports_hbr2(dev))
+		size--;
+
+	return size;
 }
 
 static void
 intel_dp_set_clock(struct intel_encoder *encoder,
-		   struct intel_crtc_state *pipe_config, int link_bw)
+		   struct intel_crtc_state *pipe_config)
 {
 	struct drm_device *dev = encoder->base.dev;
 	const struct dp_link_dpll *divisor = NULL;
@@ -1220,7 +1255,7 @@ intel_dp_set_clock(struct intel_encoder *encoder,
 
 	if (divisor && count) {
 		for (i = 0; i < count; i++) {
-			if (link_bw == divisor[i].link_bw) {
+			if (pipe_config->port_clock == divisor[i].clock) {
 				pipe_config->dpll = divisor[i].dpll;
 				pipe_config->clock_set = true;
 				break;
@@ -1494,13 +1529,13 @@ found:
 	}
 
 	if (IS_SKYLAKE(dev) && is_edp(intel_dp))
-		skl_edp_set_pll_config(pipe_config, common_rates[clock]);
+		skl_edp_set_pll_config(pipe_config);
 	else if (IS_BROXTON(dev))
 		/* handled in ddi */;
 	else if (IS_HASWELL(dev) || IS_BROADWELL(dev))
-		hsw_dp_set_ddi_pll_sel(pipe_config, intel_dp->link_bw);
+		hsw_dp_set_ddi_pll_sel(pipe_config);
 	else
-		intel_dp_set_clock(encoder, pipe_config, intel_dp->link_bw);
+		intel_dp_set_clock(encoder, pipe_config);
 
 	return true;
 }
@@ -3418,92 +3453,6 @@ gen7_edp_signal_levels(uint8_t train_set)
 	}
 }
 
-/* Gen7.5's (HSW) DP voltage swing and pre-emphasis control */
-static uint32_t
-hsw_signal_levels(uint8_t train_set)
-{
-	int signal_levels = train_set & (DP_TRAIN_VOLTAGE_SWING_MASK |
-					 DP_TRAIN_PRE_EMPHASIS_MASK);
-	switch (signal_levels) {
-	case DP_TRAIN_VOLTAGE_SWING_LEVEL_0 | DP_TRAIN_PRE_EMPH_LEVEL_0:
-		return DDI_BUF_TRANS_SELECT(0);
-	case DP_TRAIN_VOLTAGE_SWING_LEVEL_0 | DP_TRAIN_PRE_EMPH_LEVEL_1:
-		return DDI_BUF_TRANS_SELECT(1);
-	case DP_TRAIN_VOLTAGE_SWING_LEVEL_0 | DP_TRAIN_PRE_EMPH_LEVEL_2:
-		return DDI_BUF_TRANS_SELECT(2);
-	case DP_TRAIN_VOLTAGE_SWING_LEVEL_0 | DP_TRAIN_PRE_EMPH_LEVEL_3:
-		return DDI_BUF_TRANS_SELECT(3);
-
-	case DP_TRAIN_VOLTAGE_SWING_LEVEL_1 | DP_TRAIN_PRE_EMPH_LEVEL_0:
-		return DDI_BUF_TRANS_SELECT(4);
-	case DP_TRAIN_VOLTAGE_SWING_LEVEL_1 | DP_TRAIN_PRE_EMPH_LEVEL_1:
-		return DDI_BUF_TRANS_SELECT(5);
-	case DP_TRAIN_VOLTAGE_SWING_LEVEL_1 | DP_TRAIN_PRE_EMPH_LEVEL_2:
-		return DDI_BUF_TRANS_SELECT(6);
-
-	case DP_TRAIN_VOLTAGE_SWING_LEVEL_2 | DP_TRAIN_PRE_EMPH_LEVEL_0:
-		return DDI_BUF_TRANS_SELECT(7);
-	case DP_TRAIN_VOLTAGE_SWING_LEVEL_2 | DP_TRAIN_PRE_EMPH_LEVEL_1:
-		return DDI_BUF_TRANS_SELECT(8);
-
-	case DP_TRAIN_VOLTAGE_SWING_LEVEL_3 | DP_TRAIN_PRE_EMPH_LEVEL_0:
-		return DDI_BUF_TRANS_SELECT(9);
-	default:
-		DRM_DEBUG_KMS("Unsupported voltage swing/pre-emphasis level:"
-			      "0x%x\n", signal_levels);
-		return DDI_BUF_TRANS_SELECT(0);
-	}
-}
-
-static void bxt_signal_levels(struct intel_dp *intel_dp)
-{
-	struct intel_digital_port *dport = dp_to_dig_port(intel_dp);
-	enum port port = dport->port;
-	struct drm_device *dev = dport->base.base.dev;
-	struct intel_encoder *encoder = &dport->base;
-	uint8_t train_set = intel_dp->train_set[0];
-	uint32_t level = 0;
-
-	int signal_levels = train_set & (DP_TRAIN_VOLTAGE_SWING_MASK |
-					 DP_TRAIN_PRE_EMPHASIS_MASK);
-	switch (signal_levels) {
-	default:
-		DRM_DEBUG_KMS("Unsupported voltage swing/pre-emph level\n");
-	case DP_TRAIN_VOLTAGE_SWING_LEVEL_0 | DP_TRAIN_PRE_EMPH_LEVEL_0:
-		level = 0;
-		break;
-	case DP_TRAIN_VOLTAGE_SWING_LEVEL_0 | DP_TRAIN_PRE_EMPH_LEVEL_1:
-		level = 1;
-		break;
-	case DP_TRAIN_VOLTAGE_SWING_LEVEL_0 | DP_TRAIN_PRE_EMPH_LEVEL_2:
-		level = 2;
-		break;
-	case DP_TRAIN_VOLTAGE_SWING_LEVEL_0 | DP_TRAIN_PRE_EMPH_LEVEL_3:
-		level = 3;
-		break;
-	case DP_TRAIN_VOLTAGE_SWING_LEVEL_1 | DP_TRAIN_PRE_EMPH_LEVEL_0:
-		level = 4;
-		break;
-	case DP_TRAIN_VOLTAGE_SWING_LEVEL_1 | DP_TRAIN_PRE_EMPH_LEVEL_1:
-		level = 5;
-		break;
-	case DP_TRAIN_VOLTAGE_SWING_LEVEL_1 | DP_TRAIN_PRE_EMPH_LEVEL_2:
-		level = 6;
-		break;
-	case DP_TRAIN_VOLTAGE_SWING_LEVEL_2 | DP_TRAIN_PRE_EMPH_LEVEL_0:
-		level = 7;
-		break;
-	case DP_TRAIN_VOLTAGE_SWING_LEVEL_2 | DP_TRAIN_PRE_EMPH_LEVEL_1:
-		level = 8;
-		break;
-	case DP_TRAIN_VOLTAGE_SWING_LEVEL_3 | DP_TRAIN_PRE_EMPH_LEVEL_0:
-		level = 9;
-		break;
-	}
-
-	bxt_ddi_vswing_sequence(dev, level, port, encoder->type);
-}
-
 /* Properly updates "DP" with the correct signal levels. */
 static void
 intel_dp_set_signal_levels(struct intel_dp *intel_dp, uint32_t *DP)
@@ -3511,22 +3460,20 @@ intel_dp_set_signal_levels(struct intel_dp *intel_dp, uint32_t *DP)
 	struct intel_digital_port *intel_dig_port = dp_to_dig_port(intel_dp);
 	enum port port = intel_dig_port->port;
 	struct drm_device *dev = intel_dig_port->base.base.dev;
-	uint32_t signal_levels, mask;
+	uint32_t signal_levels, mask = 0;
 	uint8_t train_set = intel_dp->train_set[0];
 
-	if (IS_BROXTON(dev)) {
-		signal_levels = 0;
-		bxt_signal_levels(intel_dp);
-		mask = 0;
-	} else if (HAS_DDI(dev)) {
-		signal_levels = hsw_signal_levels(train_set);
-		mask = DDI_BUF_EMP_MASK;
+	if (HAS_DDI(dev)) {
+		signal_levels = ddi_signal_levels(intel_dp);
+
+		if (IS_BROXTON(dev))
+			signal_levels = 0;
+		else
+			mask = DDI_BUF_EMP_MASK;
 	} else if (IS_CHERRYVIEW(dev)) {
 		signal_levels = chv_signal_levels(intel_dp);
-		mask = 0;
 	} else if (IS_VALLEYVIEW(dev)) {
 		signal_levels = vlv_signal_levels(intel_dp);
-		mask = 0;
 	} else if (IS_GEN7(dev) && port == PORT_A) {
 		signal_levels = gen7_edp_signal_levels(train_set);
 		mask = EDP_LINK_TRAIN_VOL_EMP_MASK_IVB;
@@ -4987,9 +4934,12 @@ intel_dp_hpd_pulse(struct intel_digital_port *intel_dig_port, bool long_hpd)
 
 		intel_dp_probe_oui(intel_dp);
 
-		if (!intel_dp_probe_mst(intel_dp))
+		if (!intel_dp_probe_mst(intel_dp)) {
+			drm_modeset_lock(&dev->mode_config.connection_mutex, NULL);
+			intel_dp_check_link_status(intel_dp);
+			drm_modeset_unlock(&dev->mode_config.connection_mutex);
 			goto mst_fail;
-
+		}
 	} else {
 		if (intel_dp->is_mst) {
 			if (intel_dp_check_mst_status(intel_dp) == -EINVAL)
@@ -4997,10 +4947,6 @@ intel_dp_hpd_pulse(struct intel_digital_port *intel_dig_port, bool long_hpd)
 		}
 
 		if (!intel_dp->is_mst) {
-			/*
-			 * we'll check the link status via the normal hot plug path later -
-			 * but for short hpds we should check it now
-			 */
 			drm_modeset_lock(&dev->mode_config.connection_mutex, NULL);
 			intel_dp_check_link_status(intel_dp);
 			drm_modeset_unlock(&dev->mode_config.connection_mutex);
@@ -5042,16 +4988,17 @@ intel_trans_dp_port_sel(struct drm_crtc *crtc)
 	return -1;
 }
 
-/* check the VBT to see whether the eDP is on DP-D port */
+/* check the VBT to see whether the eDP is on another port */
 bool intel_dp_is_edp(struct drm_device *dev, enum port port)
 {
 	struct drm_i915_private *dev_priv = dev->dev_private;
 	union child_device_config *p_child;
 	int i;
 	static const short port_mapping[] = {
-		[PORT_B] = PORT_IDPB,
-		[PORT_C] = PORT_IDPC,
-		[PORT_D] = PORT_IDPD,
+		[PORT_B] = DVO_PORT_DPB,
+		[PORT_C] = DVO_PORT_DPC,
+		[PORT_D] = DVO_PORT_DPD,
+		[PORT_E] = DVO_PORT_DPE,
 	};
 
 	if (port == PORT_A)
@@ -5833,6 +5780,9 @@ intel_dp_init_connector(struct intel_digital_port *intel_dig_port,
 	case PORT_D:
 		intel_encoder->hpd_pin = HPD_PORT_D;
 		break;
+	case PORT_E:
+		intel_encoder->hpd_pin = HPD_PORT_E;
+		break;
 	default:
 		BUG();
 	}
@@ -5951,7 +5901,7 @@ intel_dp_init(struct drm_device *dev, int output_reg, enum port port)
 	intel_encoder->hot_plug = intel_dp_hot_plug;
 
 	intel_dig_port->hpd_pulse = intel_dp_hpd_pulse;
-	dev_priv->hpd_irq_port[port] = intel_dig_port;
+	dev_priv->hotplug.irq_port[port] = intel_dig_port;
 
 	if (!intel_dp_init_connector(intel_dig_port, intel_connector)) {
 		drm_encoder_cleanup(encoder);
@@ -5967,7 +5917,7 @@ void intel_dp_mst_suspend(struct drm_device *dev)
 
 	/* disable MST */
 	for (i = 0; i < I915_MAX_PORTS; i++) {
-		struct intel_digital_port *intel_dig_port = dev_priv->hpd_irq_port[i];
+		struct intel_digital_port *intel_dig_port = dev_priv->hotplug.irq_port[i];
 		if (!intel_dig_port)
 			continue;
 
@@ -5986,7 +5936,7 @@ void intel_dp_mst_resume(struct drm_device *dev)
 	int i;
 
 	for (i = 0; i < I915_MAX_PORTS; i++) {
-		struct intel_digital_port *intel_dig_port = dev_priv->hpd_irq_port[i];
+		struct intel_digital_port *intel_dig_port = dev_priv->hotplug.irq_port[i];
 		if (!intel_dig_port)
 			continue;
 		if (intel_dig_port->base.type == INTEL_OUTPUT_DISPLAYPORT) {

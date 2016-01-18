@@ -8,7 +8,6 @@
  *
  * Limitations of the emulation:
  * (RAZ/WI: read as zero, write ignore, RAO/WI: read as one, write ignore)
- * - We do not support LPIs (yet). TYPER.LPIS is reported as 0 and is RAZ/WI.
  * - We do not support the message based interrupts (MBIs) triggered by
  *   writes to the GICD_{SET,CLR}SPI_* registers. TYPER.MBIS is reported as 0.
  * - We do not support the (optional) backwards compatibility feature.
@@ -48,6 +47,7 @@
 #include <asm/kvm_mmu.h>
 
 #include "vgic.h"
+#include "its-emul.h"
 
 static bool handle_mmio_rao_wi(struct kvm_vcpu *vcpu,
 			       struct kvm_exit_mmio *mmio, phys_addr_t offset)
@@ -86,10 +86,10 @@ static bool handle_mmio_ctlr(struct kvm_vcpu *vcpu,
 /*
  * As this implementation does not provide compatibility
  * with GICv2 (ARE==1), we report zero CPUs in bits [5..7].
- * Also LPIs and MBIs are not supported, so we set the respective bits to 0.
- * Also we report at most 2**10=1024 interrupt IDs (to match 1024 SPIs).
+ * Also we report at most 2**10=1024 interrupt IDs (to match 1024 SPIs)
+ * and provide 16 bits worth of LPI number space (to give 8192 LPIs).
  */
-#define INTERRUPT_ID_BITS 10
+#define INTERRUPT_ID_BITS_SPIS 10
 static bool handle_mmio_typer(struct kvm_vcpu *vcpu,
 			      struct kvm_exit_mmio *mmio, phys_addr_t offset)
 {
@@ -97,7 +97,12 @@ static bool handle_mmio_typer(struct kvm_vcpu *vcpu,
 
 	reg = (min(vcpu->kvm->arch.vgic.nr_irqs, 1024) >> 5) - 1;
 
-	reg |= (INTERRUPT_ID_BITS - 1) << 19;
+	if (vgic_has_its(vcpu->kvm)) {
+		reg |= GICD_TYPER_LPIS;
+		reg |= (INTERRUPT_ID_BITS_ITS - 1) << 19;
+	} else {
+		reg |= (INTERRUPT_ID_BITS_SPIS - 1) << 19;
+	}
 
 	vgic_reg_access(mmio, &reg, offset,
 			ACCESS_READ_VALUE | ACCESS_WRITE_IGNORED);
@@ -530,9 +535,22 @@ static bool handle_mmio_ctlr_redist(struct kvm_vcpu *vcpu,
 				    struct kvm_exit_mmio *mmio,
 				    phys_addr_t offset)
 {
-	/* since we don't support LPIs, this register is zero for now */
-	vgic_reg_access(mmio, NULL, offset,
-			ACCESS_READ_RAZ | ACCESS_WRITE_IGNORED);
+	struct vgic_dist *dist = &vcpu->kvm->arch.vgic;
+	u32 reg;
+
+	if (!vgic_has_its(vcpu->kvm)) {
+		vgic_reg_access(mmio, NULL, offset,
+				ACCESS_READ_RAZ | ACCESS_WRITE_IGNORED);
+		return false;
+	}
+	reg = dist->lpis_enabled ? GICR_CTLR_ENABLE_LPIS : 0;
+	vgic_reg_access(mmio, &reg, offset,
+			ACCESS_READ_VALUE | ACCESS_WRITE_VALUE);
+	if (!dist->lpis_enabled && (reg & GICR_CTLR_ENABLE_LPIS)) {
+		vgic_enable_lpis(vcpu);
+		dist->lpis_enabled = true;
+		return true;
+	}
 	return false;
 }
 
@@ -558,6 +576,8 @@ static bool handle_mmio_typer_redist(struct kvm_vcpu *vcpu,
 	reg = redist_vcpu->vcpu_id << 8;
 	if (target_vcpu_id == atomic_read(&vcpu->kvm->online_vcpus) - 1)
 		reg |= GICR_TYPER_LAST;
+	if (vgic_has_its(vcpu->kvm))
+		reg |= GICR_TYPER_PLPIS;
 	vgic_reg_access(mmio, &reg, offset,
 			ACCESS_READ_VALUE | ACCESS_WRITE_IGNORED);
 	return false;
@@ -651,6 +671,38 @@ static bool handle_mmio_cfg_reg_redist(struct kvm_vcpu *vcpu,
 	return vgic_handle_cfg_reg(reg, mmio, offset);
 }
 
+/* We don't trigger any actions here, just store the register value */
+static bool handle_mmio_propbaser_redist(struct kvm_vcpu *vcpu,
+					 struct kvm_exit_mmio *mmio,
+					 phys_addr_t offset)
+{
+	struct vgic_dist *dist = &vcpu->kvm->arch.vgic;
+	int mode = ACCESS_READ_VALUE;
+
+	/* Storing a value with LPIs already enabled is undefined */
+	mode |= dist->lpis_enabled ? ACCESS_WRITE_IGNORED : ACCESS_WRITE_VALUE;
+	vgic_handle_base_register(vcpu, mmio, offset, &dist->propbaser, mode);
+
+	return false;
+}
+
+/* We don't trigger any actions here, just store the register value */
+static bool handle_mmio_pendbaser_redist(struct kvm_vcpu *vcpu,
+					 struct kvm_exit_mmio *mmio,
+					 phys_addr_t offset)
+{
+	struct kvm_vcpu *rdvcpu = mmio->private;
+	struct vgic_dist *dist = &vcpu->kvm->arch.vgic;
+	int mode = ACCESS_READ_VALUE;
+
+	/* Storing a value with LPIs already enabled is undefined */
+	mode |= dist->lpis_enabled ? ACCESS_WRITE_IGNORED : ACCESS_WRITE_VALUE;
+	vgic_handle_base_register(vcpu, mmio, offset,
+				  &dist->pendbaser[rdvcpu->vcpu_id], mode);
+
+	return false;
+}
+
 #define SGI_base(x) ((x) + SZ_64K)
 
 static const struct vgic_io_range vgic_redist_ranges[] = {
@@ -677,6 +729,18 @@ static const struct vgic_io_range vgic_redist_ranges[] = {
 		.len            = 0x04,
 		.bits_per_irq   = 0,
 		.handle_mmio    = handle_mmio_raz_wi,
+	},
+	{
+		.base		= GICR_PENDBASER,
+		.len		= 0x08,
+		.bits_per_irq	= 0,
+		.handle_mmio	= handle_mmio_pendbaser_redist,
+	},
+	{
+		.base		= GICR_PROPBASER,
+		.len		= 0x08,
+		.bits_per_irq	= 0,
+		.handle_mmio	= handle_mmio_propbaser_redist,
 	},
 	{
 		.base           = GICR_IDREGS,
@@ -817,6 +881,12 @@ static int vgic_v3_map_resources(struct kvm *kvm,
 		rdbase += GIC_V3_REDIST_SIZE;
 	}
 
+	if (vgic_has_its(kvm)) {
+		ret = vits_init(kvm);
+		if (ret)
+			goto out_unregister;
+	}
+
 	dist->redist_iodevs = iodevs;
 	dist->ready = true;
 	goto out;
@@ -862,6 +932,16 @@ static int vgic_v3_init_model(struct kvm *kvm)
 	return 0;
 }
 
+static void vgic_v3_destroy_model(struct kvm *kvm)
+{
+	struct vgic_dist *dist = &kvm->arch.vgic;
+
+	vits_destroy(kvm);
+
+	kfree(dist->irq_spi_mpidr);
+	dist->irq_spi_mpidr = NULL;
+}
+
 /* GICv3 does not keep track of SGI sources anymore. */
 static void vgic_v3_add_sgi_source(struct kvm_vcpu *vcpu, int irq, int source)
 {
@@ -874,7 +954,15 @@ void vgic_v3_init_emulation(struct kvm *kvm)
 	dist->vm_ops.queue_sgi = vgic_v3_queue_sgi;
 	dist->vm_ops.add_sgi_source = vgic_v3_add_sgi_source;
 	dist->vm_ops.init_model = vgic_v3_init_model;
+	dist->vm_ops.destroy_model = vgic_v3_destroy_model;
 	dist->vm_ops.map_resources = vgic_v3_map_resources;
+	dist->vm_ops.inject_msi = vits_inject_msi;
+	dist->vm_ops.queue_lpis = vits_queue_lpis;
+	dist->vm_ops.unqueue_lpi = vits_unqueue_lpi;
+
+	dist->vgic_dist_base = VGIC_ADDR_UNDEF;
+	dist->vgic_redist_base = VGIC_ADDR_UNDEF;
+	dist->vgic_its_base = VGIC_ADDR_UNDEF;
 
 	kvm->arch.max_vcpus = KVM_MAX_VCPUS;
 }
@@ -1047,6 +1135,7 @@ static int vgic_v3_has_attr(struct kvm_device *dev,
 			return -ENXIO;
 		case KVM_VGIC_V3_ADDR_TYPE_DIST:
 		case KVM_VGIC_V3_ADDR_TYPE_REDIST:
+		case KVM_VGIC_V3_ADDR_TYPE_ITS:
 			return 0;
 		}
 		break;

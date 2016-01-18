@@ -14,6 +14,7 @@
 #include <linux/xattr.h>
 #include <linux/rbtree.h>
 #include <linux/security.h>
+#include <linux/sched.h>
 #include <linux/cred.h>
 #include "overlayfs.h"
 
@@ -43,6 +44,7 @@ struct ovl_readdir_data {
 	struct ovl_cache_entry *first_maybe_whiteout;
 	int count;
 	int err;
+	int is_legacy;
 };
 
 struct ovl_dir_file {
@@ -98,7 +100,7 @@ static struct ovl_cache_entry *ovl_cache_entry_new(struct ovl_readdir_data *rdd,
 	p->ino = ino;
 	p->is_whiteout = false;
 
-	if (d_type == DT_CHR) {
+	if ((d_type == DT_CHR && !rdd->is_legacy) || (d_type == DT_LNK && rdd->is_legacy)) {
 		p->next_maybe_whiteout = rdd->first_maybe_whiteout;
 		rdd->first_maybe_whiteout = p;
 	}
@@ -224,7 +226,7 @@ static int ovl_check_whiteouts(struct dentry *dir, struct ovl_readdir_data *rdd)
 			rdd->first_maybe_whiteout = p->next_maybe_whiteout;
 			dentry = lookup_one_len(p->name, dir, p->len);
 			if (!IS_ERR(dentry)) {
-				p->is_whiteout = ovl_is_whiteout(dentry);
+				p->is_whiteout = ovl_is_whiteout(dentry, rdd->is_legacy);
 				dput(dentry);
 			}
 		}
@@ -290,11 +292,16 @@ static int ovl_dir_read_merged(struct dentry *dentry, struct list_head *list)
 		.list = list,
 		.root = RB_ROOT,
 		.is_merge = false,
+		.is_legacy = ovl_config_legacy(dentry),
 	};
 	int idx, next;
 
 	for (idx = 0; idx != -1; idx = next) {
 		next = ovl_path_next(idx, dentry, &realpath);
+
+		err = ovl_dentry_root_may(dentry, &realpath, MAY_READ);
+		if (err)
+			break;
 
 		if (next != -1) {
 			err = ovl_dir_read(&realpath, &rdd);
@@ -369,8 +376,13 @@ static int ovl_iterate(struct file *file, struct dir_context *ctx)
 	if (!ctx->pos)
 		ovl_dir_reset(file);
 
-	if (od->is_real)
+	if (od->is_real) {
+		int res = ovl_dentry_root_may(dentry, &(od->realfile->f_path), MAY_READ);
+		if (res)
+			return res;
+
 		return iterate_dir(od->realfile, ctx);
+	}
 
 	if (!od->cache) {
 		struct ovl_dir_cache *cache;

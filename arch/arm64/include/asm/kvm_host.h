@@ -30,12 +30,6 @@
 
 #define __KVM_HAVE_ARCH_INTC_INITIALIZED
 
-#if defined(CONFIG_KVM_ARM_MAX_VCPUS)
-#define KVM_MAX_VCPUS CONFIG_KVM_ARM_MAX_VCPUS
-#else
-#define KVM_MAX_VCPUS 0
-#endif
-
 #define KVM_USER_MEM_SLOTS 32
 #define KVM_PRIVATE_MEM_SLOTS 4
 #define KVM_COALESCED_MMIO_PAGE_OFFSET 1
@@ -43,11 +37,14 @@
 #include <kvm/arm_vgic.h>
 #include <kvm/arm_arch_timer.h>
 
+#define KVM_MAX_VCPUS VGIC_V3_MAX_CPUS
+
 #define KVM_VCPU_MAX_FEATURES 3
+#define KVM_IRQCHIP_NUM_PINS 988 /* 1020 - 32 is the number of SPI */
 
 int __attribute_const__ kvm_target_cpu(void);
 int kvm_reset_vcpu(struct kvm_vcpu *vcpu);
-int kvm_arch_dev_ioctl_check_extension(long ext);
+int kvm_arch_dev_ioctl_check_extension(struct kvm *kvm, long ext);
 
 struct kvm_arch {
 	/* The VMID generation used for the virt. memory system */

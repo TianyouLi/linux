@@ -4455,7 +4455,7 @@ static ssize_t ipr_show_device_id(struct device *dev, struct device_attribute *a
 	spin_lock_irqsave(ioa_cfg->host->host_lock, lock_flags);
 	res = (struct ipr_resource_entry *)sdev->hostdata;
 	if (res && ioa_cfg->sis64)
-		len = snprintf(buf, PAGE_SIZE, "0x%llx\n", res->dev_id);
+		len = snprintf(buf, PAGE_SIZE, "0x%llx\n", be64_to_cpu(res->dev_id));
 	else if (res)
 		len = snprintf(buf, PAGE_SIZE, "0x%llx\n", res->lun_wwn);
 
@@ -4554,7 +4554,7 @@ static ssize_t ipr_store_raw_mode(struct device *dev,
 	spin_lock_irqsave(ioa_cfg->host->host_lock, lock_flags);
 	res = (struct ipr_resource_entry *)sdev->hostdata;
 	if (res) {
-		if (ioa_cfg->sis64 && ipr_is_af_dasd_device(res)) {
+		if (ipr_is_af_dasd_device(res)) {
 			res->raw_mode = simple_strtoul(buf, NULL, 10);
 			len = strlen(buf);
 			if (res->sdev)

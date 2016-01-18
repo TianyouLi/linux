@@ -33,6 +33,9 @@
 #define RMI_READ_DATA_PENDING		1
 #define RMI_STARTED			2
 
+#define RMI_SLEEP_NORMAL		0x0
+#define RMI_SLEEP_DEEP_SLEEP		0x1
+
 /* device flags */
 #define RMI_DEVICE			BIT(0)
 #define RMI_DEVICE_HAS_PHYS_BUTTONS	BIT(1)
@@ -126,6 +129,10 @@ struct rmi_data {
 
 	unsigned long device_flags;
 	unsigned long firmware_id;
+
+	u8 f01_ctrl0;
+	u8 interrupt_enable_mask;
+	bool restore_interrupt_mask;
 };
 
 #define RMI_PAGE(addr) (((addr) >> 8) & 0xff)
@@ -346,13 +353,34 @@ static void rmi_f11_process_touch(struct rmi_data *hdata, int slot,
 	}
 }
 
+static int rmi_reset_attn_mode(struct hid_device *hdev)
+{
+	struct rmi_data *data = hid_get_drvdata(hdev);
+	int ret;
+
+	ret = rmi_set_mode(hdev, RMI_MODE_ATTN_REPORTS);
+	if (ret)
+		return ret;
+
+	if (data->restore_interrupt_mask) {
+		ret = rmi_write(hdev, data->f01.control_base_addr + 1,
+				&data->interrupt_enable_mask);
+		if (ret) {
+			hid_err(hdev, "can not write F01 control register\n");
+			return ret;
+		}
+	}
+
+	return 0;
+}
+
 static void rmi_reset_work(struct work_struct *work)
 {
 	struct rmi_data *hdata = container_of(work, struct rmi_data,
 						reset_work);
 
 	/* switch the device to RMI if we receive a generic mouse report */
-	rmi_set_mode(hdata->hdev, RMI_MODE_ATTN_REPORTS);
+	rmi_reset_attn_mode(hdata->hdev);
 }
 
 static inline int rmi_schedule_reset(struct hid_device *hdev)
@@ -532,14 +560,56 @@ static int rmi_event(struct hid_device *hdev, struct hid_field *field,
 }
 
 #ifdef CONFIG_PM
+static int rmi_set_sleep_mode(struct hid_device *hdev, int sleep_mode)
+{
+	struct rmi_data *data = hid_get_drvdata(hdev);
+	int ret;
+	u8 f01_ctrl0;
+
+	f01_ctrl0 = (data->f01_ctrl0 & ~0x3) | sleep_mode;
+
+	ret = rmi_write(hdev, data->f01.control_base_addr,
+			&f01_ctrl0);
+	if (ret) {
+		hid_err(hdev, "can not write sleep mode\n");
+		return ret;
+	}
+
+	return 0;
+}
+
+static int rmi_suspend(struct hid_device *hdev, pm_message_t message)
+{
+	if (!device_may_wakeup(hdev->dev.parent))
+		return rmi_set_sleep_mode(hdev, RMI_SLEEP_DEEP_SLEEP);
+
+	return 0;
+}
+
 static int rmi_post_reset(struct hid_device *hdev)
 {
-	return rmi_set_mode(hdev, RMI_MODE_ATTN_REPORTS);
+	int ret;
+
+	ret = rmi_reset_attn_mode(hdev);
+	if (ret) {
+		hid_err(hdev, "can not set rmi mode\n");
+		return ret;
+	}
+
+	if (!device_may_wakeup(hdev->dev.parent)) {
+		ret = rmi_set_sleep_mode(hdev, RMI_SLEEP_NORMAL);
+		if (ret) {
+			hid_err(hdev, "can not write sleep mode\n");
+			return ret;
+		}
+	}
+
+	return ret;
 }
 
 static int rmi_post_resume(struct hid_device *hdev)
 {
-	return rmi_set_mode(hdev, RMI_MODE_ATTN_REPORTS);
+	return rmi_reset_attn_mode(hdev);
 }
 #endif /* CONFIG_PM */
 
@@ -595,6 +665,7 @@ static void rmi_register_function(struct rmi_data *data,
 		f->interrupt_count = pdt_entry->interrupt_source_count;
 		f->irq_mask = rmi_gen_mask(f->interrupt_base,
 						f->interrupt_count);
+		data->interrupt_enable_mask |= f->irq_mask;
 	}
 }
 
@@ -730,6 +801,35 @@ static int rmi_populate_f01(struct hid_device *hdev)
 
 		data->firmware_id = info[1] << 8 | info[0];
 		data->firmware_id += info[2] * 65536;
+	}
+
+	ret = rmi_read_block(hdev, data->f01.control_base_addr, info,
+				2);
+
+	if (ret) {
+		hid_err(hdev, "can not read f01 ctrl registers\n");
+		return ret;
+	}
+
+	data->f01_ctrl0 = info[0];
+
+	if (!info[1]) {
+		/*
+		 * Do to a firmware bug in some touchpads the F01 interrupt
+		 * enable control register will be cleared on reset.
+		 * This will stop the touchpad from reporting data, so
+		 * if F01 CTRL1 is 0 then we need to explicitly enable
+		 * interrupts for the functions we want data for.
+		 */
+		data->restore_interrupt_mask = true;
+
+		ret = rmi_write(hdev, data->f01.control_base_addr + 1,
+				&data->interrupt_enable_mask);
+		if (ret) {
+			hid_err(hdev, "can not write to control reg 1: %d.\n",
+				ret);
+			return ret;
+		}
 	}
 
 	return 0;
@@ -1273,6 +1373,7 @@ static struct hid_driver rmi_driver = {
 	.input_mapping		= rmi_input_mapping,
 	.input_configured	= rmi_input_configured,
 #ifdef CONFIG_PM
+	.suspend		= rmi_suspend,
 	.resume			= rmi_post_resume,
 	.reset_resume		= rmi_post_reset,
 #endif

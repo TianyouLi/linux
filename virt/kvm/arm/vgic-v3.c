@@ -178,6 +178,7 @@ static void vgic_v3_enable(struct kvm_vcpu *vcpu)
 	 * anyway.
 	 */
 	vgic_v3->vgic_vmcr = 0;
+	vgic_v3->vgic_elrsr = ~0;
 
 	/*
 	 * If we are emulating a GICv3, we do it in an non-GICv2-compatible
@@ -273,7 +274,7 @@ int vgic_v3_probe(struct device_node *vgic_node,
 
 	vgic->vctrl_base = NULL;
 	vgic->type = VGIC_V3;
-	vgic->max_gic_vcpus = KVM_MAX_VCPUS;
+	vgic->max_gic_vcpus = VGIC_V3_MAX_CPUS;
 
 	kvm_info("%s@%llx IRQ%d\n", vgic_node->name,
 		 vcpu_res.start, vgic->maint_irq);

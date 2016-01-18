@@ -1106,6 +1106,9 @@ bool ibx_digital_port_connected(struct drm_i915_private *dev_priv,
 		case PORT_D:
 			bit = SDE_PORTD_HOTPLUG_CPT;
 			break;
+		case PORT_E:
+			bit = SDE_PORTE_HOTPLUG_SPT;
+			break;
 		default:
 			return true;
 		}
@@ -1728,6 +1731,8 @@ static void i9xx_enable_pll(struct intel_crtc *crtc)
 		I915_WRITE(DPLL(!crtc->pipe),
 			   I915_READ(DPLL(!crtc->pipe)) | DPLL_DVO_2X_MODE);
 	}
+
+	I915_WRITE(reg, dpll);
 
 	/* Wait for the clocks to stabilize. */
 	POSTING_READ(reg);
@@ -5252,6 +5257,8 @@ static enum intel_display_power_domain port_to_power_domain(enum port port)
 		return POWER_DOMAIN_PORT_DDI_C_4_LANES;
 	case PORT_D:
 		return POWER_DOMAIN_PORT_DDI_D_4_LANES;
+	case PORT_E:
+		return POWER_DOMAIN_PORT_DDI_E_2_LANES;
 	default:
 		WARN_ON_ONCE(1);
 		return POWER_DOMAIN_PORT_OTHER;
@@ -5714,15 +5721,12 @@ void skl_init_cdclk(struct drm_i915_private *dev_priv)
 	/* enable PG1 and Misc I/O */
 	intel_display_power_get(dev_priv, POWER_DOMAIN_PLLS);
 
-	/* DPLL0 already enabed !? */
-	if (I915_READ(LCPLL1_CTL) & LCPLL_PLL_ENABLE) {
-		DRM_DEBUG_DRIVER("DPLL0 already running\n");
-		return;
+	/* DPLL0 not enabled (happens on early BIOS versions) */
+	if (!(I915_READ(LCPLL1_CTL) & LCPLL_PLL_ENABLE)) {
+		/* enable DPLL0 */
+		required_vco = skl_cdclk_get_vco(dev_priv->skl_boot_cdclk);
+		skl_dpll0_enable(dev_priv, required_vco);
 	}
-
-	/* enable DPLL0 */
-	required_vco = skl_cdclk_get_vco(dev_priv->skl_boot_cdclk);
-	skl_dpll0_enable(dev_priv, required_vco);
 
 	/* set CDCLK to the frequency the BIOS chose */
 	skl_set_cdclk(dev_priv, dev_priv->skl_boot_cdclk);
@@ -13292,8 +13296,12 @@ intel_check_primary_plane(struct drm_plane *plane,
 
 		intel_crtc->atomic.update_fbc = true;
 
-		if (intel_wm_need_update(plane, &state->base))
-			intel_crtc->atomic.update_wm = true;
+		if (state->visible && !old_state->visible)
+			intel_crtc->atomic.update_wm_pre = true;
+		else if (!state->visible && old_state->visible)
+			intel_crtc->atomic.update_wm_post = true;
+		else if (intel_wm_need_update(plane, &state->base))
+			intel_crtc->atomic.update_wm_pre = true;
 	}
 
 	if (INTEL_INFO(dev)->gen >= 9) {
@@ -13390,7 +13398,7 @@ static void intel_begin_crtc_commit(struct drm_crtc *crtc)
 	if (intel_crtc->atomic.pre_disable_primary)
 		intel_pre_disable_primary(crtc);
 
-	if (intel_crtc->atomic.update_wm)
+	if (intel_crtc->atomic.update_wm_pre)
 		intel_update_watermarks(crtc);
 
 	intel_runtime_pm_get(dev_priv);
@@ -13419,6 +13427,9 @@ static void intel_finish_crtc_commit(struct drm_crtc *crtc)
 		intel_wait_for_vblank(dev, intel_crtc->pipe);
 
 	intel_frontbuffer_flip(dev, intel_crtc->atomic.fb_bits);
+
+	if (intel_crtc->atomic.update_wm_post)
+	        intel_update_watermarks(crtc);
 
 	if (intel_crtc->atomic.update_fbc) {
 		mutex_lock(&dev->struct_mutex);
@@ -13591,7 +13602,7 @@ intel_check_cursor_plane(struct drm_plane *plane,
 finish:
 	if (intel_crtc->active) {
 		if (plane->state->crtc_w != state->base.crtc_w)
-			intel_crtc->atomic.update_wm = true;
+			intel_crtc->atomic.update_wm_post = true;
 
 		intel_crtc->atomic.fb_bits |=
 			INTEL_FRONTBUFFER_CURSOR(intel_crtc->pipe);
@@ -13919,8 +13930,7 @@ static void intel_setup_outputs(struct drm_device *dev)
 		 */
 		found = I915_READ(DDI_BUF_CTL_A) & DDI_INIT_DISPLAY_DETECTED;
 		/* WaIgnoreDDIAStrap: skl */
-		if (found ||
-		    (IS_SKYLAKE(dev) && INTEL_REVID(dev) < SKL_REVID_D0))
+		if (found || IS_SKYLAKE(dev))
 			intel_ddi_init(dev, PORT_A);
 
 		/* DDI B, C and D detection is indicated by the SFUSE_STRAP
@@ -13933,6 +13943,15 @@ static void intel_setup_outputs(struct drm_device *dev)
 			intel_ddi_init(dev, PORT_C);
 		if (found & SFUSE_STRAP_DDID_DETECTED)
 			intel_ddi_init(dev, PORT_D);
+		/*
+		 * On SKL we don't have a way to detect DDI-E so we rely on VBT.
+		 */
+		if (IS_SKYLAKE(dev) &&
+		    (dev_priv->vbt.ddi_port_info[PORT_E].supports_dp ||
+		     dev_priv->vbt.ddi_port_info[PORT_E].supports_dvi ||
+		     dev_priv->vbt.ddi_port_info[PORT_E].supports_hdmi))
+			intel_ddi_init(dev, PORT_E);
+
 	} else if (HAS_PCH_SPLIT(dev)) {
 		int found;
 		dpd_is_edp = intel_dp_is_edp(dev, PORT_D);
@@ -14069,6 +14088,11 @@ static int intel_user_framebuffer_create_handle(struct drm_framebuffer *fb,
 {
 	struct intel_framebuffer *intel_fb = to_intel_framebuffer(fb);
 	struct drm_i915_gem_object *obj = intel_fb->obj;
+
+	if (obj->userptr.mm) {
+		DRM_DEBUG("attempting to use a userptr for a framebuffer, denied\n");
+		return -EINVAL;
+	}
 
 	return drm_gem_handle_create(file, &obj->base, handle);
 }
@@ -14665,6 +14689,24 @@ void intel_modeset_init(struct drm_device *dev)
 	if (INTEL_INFO(dev)->num_pipes == 0)
 		return;
 
+	/*
+	 * There may be no VBT; and if the BIOS enabled SSC we can
+	 * just keep using it to avoid unnecessary flicker.  Whereas if the
+	 * BIOS isn't using it, don't assume it will work even if the VBT
+	 * indicates as much.
+	 */
+	if (HAS_PCH_IBX(dev) || HAS_PCH_CPT(dev)) {
+		bool bios_lvds_use_ssc = !!(I915_READ(PCH_DREF_CONTROL) &
+					    DREF_SSC1_ENABLE);
+
+		if (dev_priv->vbt.lvds_use_ssc != bios_lvds_use_ssc) {
+			DRM_DEBUG_KMS("SSC %sabled by BIOS, overriding VBT which says %sabled\n",
+				     bios_lvds_use_ssc ? "en" : "dis",
+				     dev_priv->vbt.lvds_use_ssc ? "en" : "dis");
+			dev_priv->vbt.lvds_use_ssc = bios_lvds_use_ssc;
+		}
+	}
+
 	intel_init_display(dev);
 	intel_init_audio(dev);
 
@@ -15160,7 +15202,6 @@ void intel_modeset_setup_hw_state(struct drm_device *dev,
 
 void intel_modeset_gem_init(struct drm_device *dev)
 {
-	struct drm_i915_private *dev_priv = dev->dev_private;
 	struct drm_crtc *c;
 	struct drm_i915_gem_object *obj;
 	int ret;
@@ -15168,16 +15209,6 @@ void intel_modeset_gem_init(struct drm_device *dev)
 	mutex_lock(&dev->struct_mutex);
 	intel_init_gt_powersave(dev);
 	mutex_unlock(&dev->struct_mutex);
-
-	/*
-	 * There may be no VBT; and if the BIOS enabled SSC we can
-	 * just keep using it to avoid unnecessary flicker.  Whereas if the
-	 * BIOS isn't using it, don't assume it will work even if the VBT
-	 * indicates as much.
-	 */
-	if (HAS_PCH_IBX(dev) || HAS_PCH_CPT(dev))
-		dev_priv->vbt.lvds_use_ssc = !!(I915_READ(PCH_DREF_CONTROL) &
-						DREF_SSC1_ENABLE);
 
 	intel_modeset_init_hw(dev);
 

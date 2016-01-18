@@ -1630,9 +1630,10 @@ static int pnv_pci_ioda_dma_set_mask(struct pci_dev *pdev, u64 dma_mask)
 	return 0;
 }
 
-static u64 pnv_pci_ioda_dma_get_required_mask(struct pnv_phb *phb,
-					      struct pci_dev *pdev)
+static u64 pnv_pci_ioda_dma_get_required_mask(struct pci_dev *pdev)
 {
+	struct pci_controller *hose = pci_bus_to_host(pdev->bus);
+	struct pnv_phb *phb = hose->private_data;
 	struct pci_dn *pdn = pci_get_pdn(pdev);
 	struct pnv_ioda_pe *pe;
 	u64 end, mask;
@@ -2078,9 +2079,23 @@ static long pnv_pci_ioda2_setup_default_config(struct pnv_ioda_pe *pe)
 	struct iommu_table *tbl = NULL;
 	long rc;
 
+	/*
+	 * crashkernel= specifies the kdump kernel's maximum memory at
+	 * some offset and there is no guaranteed the result is a power
+	 * of 2, which will cause errors later.
+	 */
+	const u64 max_memory = __rounddown_pow_of_two(memory_hotplug_max());
+
+	/*
+	 * In memory constrained environments, e.g. kdump kernel, the
+	 * DMA window can be larger than available memory, which will
+	 * cause errors later.
+	 */
+	const u64 window_size = min((u64)pe->table_group.tce32_size, max_memory);
+
 	rc = pnv_pci_ioda2_create_table(&pe->table_group, 0,
 			IOMMU_PAGE_SHIFT_4K,
-			pe->table_group.tce32_size,
+			window_size,
 			POWERNV_IOMMU_DEFAULT_LEVELS, &tbl);
 	if (rc) {
 		pe_err(pe, "Failed to create 32-bit TCE table, err %ld",
@@ -3057,6 +3072,7 @@ static const struct pci_controller_ops pnv_pci_ioda_controller_ops = {
        .window_alignment = pnv_pci_window_alignment,
        .reset_secondary_bus = pnv_pci_reset_secondary_bus,
        .dma_set_mask = pnv_pci_ioda_dma_set_mask,
+       .dma_get_required_mask = pnv_pci_ioda_dma_get_required_mask,
        .shutdown = pnv_pci_ioda_shutdown,
 };
 
@@ -3203,7 +3219,6 @@ static void __init pnv_pci_init_ioda_phb(struct device_node *np,
 
 	/* Setup TCEs */
 	phb->dma_dev_setup = pnv_pci_ioda_dma_dev_setup;
-	phb->dma_get_required_mask = pnv_pci_ioda_dma_get_required_mask;
 
 	/* Setup MSI support */
 	pnv_pci_init_ioda_msis(phb);

@@ -342,6 +342,7 @@ gen7_render_ring_flush(struct intel_engine_cs *ring,
 	if (flush_domains) {
 		flags |= PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH;
 		flags |= PIPE_CONTROL_DEPTH_CACHE_FLUSH;
+		flags |= PIPE_CONTROL_FLUSH_ENABLE;
 	}
 	if (invalidate_domains) {
 		flags |= PIPE_CONTROL_TLB_INVALIDATE;
@@ -412,6 +413,7 @@ gen8_render_ring_flush(struct intel_engine_cs *ring,
 	if (flush_domains) {
 		flags |= PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH;
 		flags |= PIPE_CONTROL_DEPTH_CACHE_FLUSH;
+		flags |= PIPE_CONTROL_FLUSH_ENABLE;
 	}
 	if (invalidate_domains) {
 		flags |= PIPE_CONTROL_TLB_INVALIDATE;
@@ -931,8 +933,11 @@ static int gen9_init_workarounds(struct intel_engine_cs *ring)
 		/* WaSetDisablePixMaskCammingAndRhwoInCommonSliceChicken:skl,bxt */
 		WA_SET_BIT_MASKED(GEN7_COMMON_SLICE_CHICKEN1,
 				  GEN9_RHWO_OPTIMIZATION_DISABLE);
-		WA_SET_BIT_MASKED(GEN9_SLICE_COMMON_ECO_CHICKEN0,
-				  DISABLE_PIXEL_MASK_CAMMING);
+		/*
+		 * WA also requires GEN9_SLICE_COMMON_ECO_CHICKEN0[14:14] to be set
+		 * but we do that in per ctx batchbuffer as there is an issue
+		 * with this register not getting restored on ctx restore
+		 */
 	}
 
 	if ((IS_SKYLAKE(dev) && INTEL_REVID(dev) >= SKL_REVID_C0) ||
@@ -1023,13 +1028,6 @@ static int skl_init_workarounds(struct intel_engine_cs *ring)
 		WA_SET_BIT_MASKED(HIZ_CHICKEN,
 				  BDW_HIZ_POWER_COMPILER_CLOCK_GATING_DISABLE);
 
-	if (INTEL_REVID(dev) == SKL_REVID_C0 ||
-	    INTEL_REVID(dev) == SKL_REVID_D0)
-		/* WaBarrierPerformanceFixDisable:skl */
-		WA_SET_BIT_MASKED(HDC_CHICKEN0,
-				  HDC_FENCE_DEST_SLM_DISABLE |
-				  HDC_BARRIER_PERFORMANCE_DISABLE);
-
 	if (INTEL_REVID(dev) <= SKL_REVID_D0) {
 		/*
 		 *Use Force Non-Coherent whenever executing a 3D context. This
@@ -1039,6 +1037,20 @@ static int skl_init_workarounds(struct intel_engine_cs *ring)
 		/* WaForceEnableNonCoherent:skl */
 		WA_SET_BIT_MASKED(HDC_CHICKEN0,
 				  HDC_FORCE_NON_COHERENT);
+	}
+
+	if (INTEL_REVID(dev) == SKL_REVID_C0 ||
+	    INTEL_REVID(dev) == SKL_REVID_D0)
+		/* WaBarrierPerformanceFixDisable:skl */
+		WA_SET_BIT_MASKED(HDC_CHICKEN0,
+				  HDC_FENCE_DEST_SLM_DISABLE |
+				  HDC_BARRIER_PERFORMANCE_DISABLE);
+
+	/* WaDisableSbeCacheDispatchPortSharing:skl */
+	if (INTEL_REVID(dev) <= SKL_REVID_F0) {
+		WA_SET_BIT_MASKED(
+			GEN7_HALF_SLICE_CHICKEN1,
+			GEN7_SBE_SS_CACHE_DISPATCH_PORT_SHARING_DISABLE);
 	}
 
 	return skl_tune_iz_hashing(ring);

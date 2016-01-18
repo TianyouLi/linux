@@ -356,7 +356,6 @@ static const struct intel_device_info intel_cherryview_info = {
 };
 
 static const struct intel_device_info intel_skylake_info = {
-	.is_preliminary = 1,
 	.is_skylake = 1,
 	.gen = 9, .num_pipes = 3,
 	.need_gfx_hws = 1, .has_hotplug = 1,
@@ -369,7 +368,6 @@ static const struct intel_device_info intel_skylake_info = {
 };
 
 static const struct intel_device_info intel_skylake_gt3_info = {
-	.is_preliminary = 1,
 	.is_skylake = 1,
 	.gen = 9, .num_pipes = 3,
 	.need_gfx_hws = 1, .has_hotplug = 1,
@@ -545,15 +543,15 @@ void intel_hpd_cancel_work(struct drm_i915_private *dev_priv)
 {
 	spin_lock_irq(&dev_priv->irq_lock);
 
-	dev_priv->long_hpd_port_mask = 0;
-	dev_priv->short_hpd_port_mask = 0;
-	dev_priv->hpd_event_bits = 0;
+	dev_priv->hotplug.long_port_mask = 0;
+	dev_priv->hotplug.short_port_mask = 0;
+	dev_priv->hotplug.event_bits = 0;
 
 	spin_unlock_irq(&dev_priv->irq_lock);
 
-	cancel_work_sync(&dev_priv->dig_port_work);
-	cancel_work_sync(&dev_priv->hotplug_work);
-	cancel_delayed_work_sync(&dev_priv->hotplug_reenable_work);
+	cancel_work_sync(&dev_priv->hotplug.dig_port_work);
+	cancel_work_sync(&dev_priv->hotplug.hotplug_work);
+	cancel_delayed_work_sync(&dev_priv->hotplug.reenable_work);
 }
 
 void i915_firmware_load_error_print(const char *fw_path, int err)
@@ -683,15 +681,18 @@ static int i915_drm_suspend_late(struct drm_device *drm_dev, bool hibernation)
 
 	pci_disable_device(drm_dev->pdev);
 	/*
-	 * During hibernation on some GEN4 platforms the BIOS may try to access
+	 * During hibernation on some platforms the BIOS may try to access
 	 * the device even though it's already in D3 and hang the machine. So
 	 * leave the device in D0 on those platforms and hope the BIOS will
-	 * power down the device properly. Platforms where this was seen:
-	 * Lenovo Thinkpad X301, X61s
+	 * power down the device properly. The issue was seen on multiple old
+	 * GENs with different BIOS vendors, so having an explicit blacklist
+	 * is inpractical; apply the workaround on everything pre GEN6. The
+	 * platforms where the issue was seen:
+	 * Lenovo Thinkpad X301, X61s, X60, T60, X41
+	 * Fujitsu FSC S7110
+	 * Acer Aspire 1830T
 	 */
-	if (!(hibernation &&
-	      drm_dev->pdev->subsystem_vendor == PCI_VENDOR_ID_LENOVO &&
-	      INTEL_INFO(dev_priv)->gen == 4))
+	if (!(hibernation && INTEL_INFO(dev_priv)->gen < 6))
 		pci_set_power_state(drm_dev->pdev, PCI_D3hot);
 
 	return 0;

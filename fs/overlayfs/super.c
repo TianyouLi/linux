@@ -39,8 +39,10 @@ struct ovl_fs {
 	struct vfsmount **lower_mnt;
 	struct dentry *workdir;
 	long lower_namelen;
+	int legacy;
 	/* pathnames of lower and upper dirs, for show_options */
 	struct ovl_config config;
+	struct cred *mounter_creds;
 };
 
 struct ovl_dir_cache;
@@ -236,11 +238,70 @@ u64 ovl_dentry_version_get(struct dentry *dentry)
 	return oe->version;
 }
 
-bool ovl_is_whiteout(struct dentry *dentry)
+int ovl_dentry_root_may(struct dentry *dentry, struct path *realpath, int mode)
+{
+	const struct cred *old_cred;
+	int err = 0;
+        struct ovl_fs *ofs = dentry->d_sb->s_fs_info;
+
+	old_cred = override_creds(ofs->mounter_creds);
+
+	if (inode_permission(realpath->dentry->d_inode, mode))
+		err = -EACCES;
+
+	revert_creds(old_cred);
+
+	return err;
+}
+
+#ifdef CONFIG_OVERLAY_FS_V1
+int ovl_config_legacy(struct dentry *dentry)
+{
+	struct super_block *sb = dentry->d_sb;
+	struct ovl_fs *ufs = sb->s_fs_info;
+
+	return ufs->legacy;
+}
+
+const char *ovl_whiteout_xattr = "trusted.overlay.whiteout";
+
+bool ovl_is_whiteout_v1(struct dentry *dentry)
+{
+	int res;
+	char val;
+
+	if (!dentry)
+		return false;
+	if (!dentry->d_inode)
+		return false;
+	if (!S_ISLNK(dentry->d_inode->i_mode))
+		return false;
+	if (!dentry->d_inode->i_op->getxattr)
+		return false;
+
+	res = dentry->d_inode->i_op->getxattr(dentry, ovl_whiteout_xattr, &val, 1);
+	if (res == 1 && val == 'y')
+		return true;
+
+	return false;
+}
+#else
+#define ovl_is_whiteout_v1(x) (0)
+#endif
+
+bool ovl_is_whiteout_v2(struct dentry *dentry)
 {
 	struct inode *inode = dentry->d_inode;
 
 	return inode && IS_WHITEOUT(inode);
+}
+
+bool ovl_is_whiteout(struct dentry *dentry, int is_legacy)
+{
+	if (is_legacy)
+		return ovl_is_whiteout_v2(dentry) || ovl_is_whiteout_v1(dentry);
+
+	return ovl_is_whiteout_v2(dentry);
 }
 
 static bool ovl_is_opaquedir(struct dentry *dentry)
@@ -407,6 +468,7 @@ struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
 	struct dentry *this, *prev = NULL;
 	unsigned int i;
 	int err;
+	int is_legacy = ovl_config_legacy(dentry);
 
 	upperdir = ovl_upperdentry_dereference(poe);
 	if (upperdir) {
@@ -421,7 +483,7 @@ struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
 				err = -EREMOTE;
 				goto out;
 			}
-			if (ovl_is_whiteout(this)) {
+			if (ovl_is_whiteout(this, is_legacy)) {
 				dput(this);
 				this = NULL;
 				upperopaque = true;
@@ -455,7 +517,7 @@ struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
 		}
 		if (!this)
 			continue;
-		if (ovl_is_whiteout(this)) {
+		if (ovl_is_whiteout(this, is_legacy)) {
 			dput(this);
 			break;
 		}
@@ -540,10 +602,12 @@ static void ovl_put_super(struct super_block *sb)
 	struct ovl_fs *ufs = sb->s_fs_info;
 	unsigned i;
 
+	put_cred(ufs->mounter_creds);
 	dput(ufs->workdir);
 	mntput(ufs->upper_mnt);
 	for (i = 0; i < ufs->numlower; i++)
 		mntput(ufs->lower_mnt[i]);
+	kfree(ufs->lower_mnt);
 
 	kfree(ufs->config.lowerdir);
 	kfree(ufs->config.upperdir);
@@ -588,10 +652,10 @@ static int ovl_show_options(struct seq_file *m, struct dentry *dentry)
 	struct super_block *sb = dentry->d_sb;
 	struct ovl_fs *ufs = sb->s_fs_info;
 
-	seq_printf(m, ",lowerdir=%s", ufs->config.lowerdir);
+	seq_show_option(m, "lowerdir", ufs->config.lowerdir);
 	if (ufs->config.upperdir) {
-		seq_printf(m, ",upperdir=%s", ufs->config.upperdir);
-		seq_printf(m, ",workdir=%s", ufs->config.workdir);
+		seq_show_option(m, "upperdir", ufs->config.upperdir);
+		seq_show_option(m, "workdir", ufs->config.workdir);
 	}
 	return 0;
 }
@@ -1037,6 +1101,11 @@ static int ovl_fill_super(struct super_block *sb, void *data, int silent)
 	if (!root_dentry)
 		goto out_free_oe;
 
+	/* Record the mounter. */
+	ufs->mounter_creds = prepare_creds();
+	if (!ufs->mounter_creds)
+		goto out_put_root;
+
 	mntput(upperpath.mnt);
 	for (i = 0; i < numlower; i++)
 		mntput(stack[i].mnt);
@@ -1048,6 +1117,7 @@ static int ovl_fill_super(struct super_block *sb, void *data, int silent)
 		oe->lowerstack[i].dentry = stack[i].dentry;
 		oe->lowerstack[i].mnt = ufs->lower_mnt[i];
 	}
+	kfree(stack);
 
 	root_dentry->d_fsdata = oe;
 
@@ -1058,6 +1128,8 @@ static int ovl_fill_super(struct super_block *sb, void *data, int silent)
 
 	return 0;
 
+out_put_root:
+	dput(root_dentry);
 out_free_oe:
 	kfree(oe);
 out_put_lower_mnt:
@@ -1097,17 +1169,63 @@ static struct file_system_type ovl_fs_type = {
 	.name		= "overlay",
 	.mount		= ovl_mount,
 	.kill_sb	= kill_anon_super,
+	.fs_flags	= FS_USERNS_MOUNT,
 };
 MODULE_ALIAS_FS("overlay");
 
+#ifdef CONFIG_OVERLAY_FS_V1
+static int ovl_v1_fill_super(struct super_block *sb, void *data, int silent)
+{
+	int ret;
+	struct ovl_fs *ufs;
+
+	ret = ovl_fill_super(sb, data, silent);
+	if (ret)
+		return ret;
+
+	/* Mark this as a overlayfs format. */
+	ufs = sb->s_fs_info;
+	ufs->legacy = 1;
+
+	return ret;
+}
+
+static struct dentry *ovl_mount_v1(struct file_system_type *fs_type, int flags,
+				const char *dev_name, void *raw_data)
+{
+	return mount_nodev(fs_type, flags, raw_data, ovl_v1_fill_super);
+}
+
+static struct file_system_type ovl_v1_fs_type = {
+	.owner		= THIS_MODULE,
+	.name		= "overlayfs",
+	.mount		= ovl_mount_v1,
+	.kill_sb	= kill_anon_super,
+	.fs_flags	= FS_USERNS_MOUNT,  /* XXX */
+};
+MODULE_ALIAS_FS("overlayfs");
+MODULE_ALIAS("overlayfs");
+#endif
+
 static int __init ovl_init(void)
 {
+	int ret;
+
+	if (IS_ENABLED(CONFIG_OVERLAY_FS_V1)) {
+		ret = register_filesystem(&ovl_v1_fs_type);
+		if (ret)
+			return ret;
+	}
+
 	return register_filesystem(&ovl_fs_type);
 }
 
 static void __exit ovl_exit(void)
 {
 	unregister_filesystem(&ovl_fs_type);
+
+	if (IS_ENABLED(CONFIG_OVERLAY_FS_V1))
+		unregister_filesystem(&ovl_v1_fs_type);
 }
 
 module_init(ovl_init);

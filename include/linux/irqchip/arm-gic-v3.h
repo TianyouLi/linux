@@ -177,16 +177,25 @@
 #define GITS_CWRITER			0x0088
 #define GITS_CREADR			0x0090
 #define GITS_BASER			0x0100
+#define GITS_IDREGS_BASE		0xffd0
 #define GITS_PIDR2			GICR_PIDR2
+#define GITS_PIDR4			0xffd0
+#define GITS_CIDR0			0xfff0
+#define GITS_CIDR1			0xfff4
+#define GITS_CIDR2			0xfff8
+#define GITS_CIDR3			0xfffc
 
 #define GITS_TRANSLATER			0x10040
 
 #define GITS_CTLR_ENABLE		(1U << 0)
 #define GITS_CTLR_QUIESCENT		(1U << 31)
 
+#define GITS_TYPER_PLPIS		(1UL << 0)
+#define GITS_TYPER_IDBITS_SHIFT		8
 #define GITS_TYPER_DEVBITS_SHIFT	13
 #define GITS_TYPER_DEVBITS(r)		((((r) >> GITS_TYPER_DEVBITS_SHIFT) & 0x1f) + 1)
 #define GITS_TYPER_PTA			(1UL << 19)
+#define GITS_TYPER_HWCOLLCNT_SHIFT	24
 
 #define GITS_CBASER_VALID		(1UL << 63)
 #define GITS_CBASER_nCnB		(0UL << 59)
@@ -229,6 +238,7 @@
 #define GITS_BASER_PAGE_SIZE_16K	(1UL << GITS_BASER_PAGE_SIZE_SHIFT)
 #define GITS_BASER_PAGE_SIZE_64K	(2UL << GITS_BASER_PAGE_SIZE_SHIFT)
 #define GITS_BASER_PAGE_SIZE_MASK	(3UL << GITS_BASER_PAGE_SIZE_SHIFT)
+#define GITS_BASER_PAGES_MAX		256
 
 #define GITS_BASER_TYPE_NONE		0
 #define GITS_BASER_TYPE_DEVICE		1
@@ -244,7 +254,10 @@
  */
 #define GITS_CMD_MAPD			0x08
 #define GITS_CMD_MAPC			0x09
-#define GITS_CMD_MAPVI			0x0a
+#define GITS_CMD_MAPTI			0x0a
+/* older GIC documentation used MAPVI for this command */
+#define GITS_CMD_MAPVI			GITS_CMD_MAPTI
+#define GITS_CMD_MAPI			0x0b
 #define GITS_CMD_MOVI			0x01
 #define GITS_CMD_DISCARD		0x0f
 #define GITS_CMD_INV			0x0c

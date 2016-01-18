@@ -1167,7 +1167,7 @@ enum d_walk_ret {
  *
  * The @enter() and @finish() callbacks are called with d_lock held.
  */
-static void d_walk(struct dentry *parent, void *data,
+void d_walk(struct dentry *parent, void *data,
 		   enum d_walk_ret (*enter)(void *, struct dentry *),
 		   void (*finish)(void *))
 {
@@ -1272,6 +1272,7 @@ rename_retry:
 	seq = 1;
 	goto again;
 }
+EXPORT_SYMBOL(d_walk);
 
 /*
  * Search for at least 1 mount point in the dentry's subdirs.
@@ -2926,6 +2927,13 @@ restart:
 
 		if (dentry == vfsmnt->mnt_root || IS_ROOT(dentry)) {
 			struct mount *parent = ACCESS_ONCE(mnt->mnt_parent);
+			/* Escaped? */
+			if (dentry != vfsmnt->mnt_root) {
+				bptr = *buffer;
+				blen = *buflen;
+				error = 3;
+				break;
+			}
 			/* Global root? */
 			if (mnt != parent) {
 				dentry = ACCESS_ONCE(mnt->mnt_mountpoint);

@@ -1,0 +1,19 @@
+# arch	version		flavour		installedname			suffix	bdep
+amd64	4.2.0-23	generic		4.2.0-23-generic		-	-
+
+i386	4.2.0-23	generic		4.2.0-23-generic		-	-
+
+armhf	4.2.0-23	generic		4.2.0-23-generic		-	-
+armhf	4.2.0-23	generic-lpae	4.2.0-23-generic-lpae	-	-
+
+arm64	4.2.0-23	generic		4.2.0-23-generic		-	-
+
+ppc64el	4.2.0-23	generic		4.2.0-23-generic		-	-
+
+s390x	4.2.0-23	generic		4.2.0-23-generic		-	-
+
+# Ports
+# arch	version		flavour		installedname			suffix	bdep
+powerpc	4.2.0-23	powerpc-smp	4.2.0-23-powerpc-smp	-	-
+powerpc	4.2.0-23	powerpc64-smp	4.2.0-23-powerpc64-smp	-	-
+powerpc 4.2.0-23	powerpc-e500mc	4.2.0-23-powerpc-e500mc	-	-

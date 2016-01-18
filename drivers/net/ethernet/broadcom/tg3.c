@@ -329,6 +329,7 @@ static const struct pci_device_id tg3_pci_tbl[] = {
 	{PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, TG3PCI_DEVICE_TIGON3_57785)},
 	{PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, TG3PCI_DEVICE_TIGON3_57761)},
 	{PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, TG3PCI_DEVICE_TIGON3_57765)},
+	{PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, TG3PCI_DEVICE_TIGON3_57786)},
 	{PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, TG3PCI_DEVICE_TIGON3_57791),
 	 .driver_data = TG3_DRV_DATA_FLAG_10_100_ONLY},
 	{PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, TG3PCI_DEVICE_TIGON3_57795),
@@ -10757,7 +10758,7 @@ static ssize_t tg3_show_temp(struct device *dev,
 	tg3_ape_scratchpad_read(tp, &temperature, attr->index,
 				sizeof(temperature));
 	spin_unlock_bh(&tp->lock);
-	return sprintf(buf, "%u\n", temperature);
+	return sprintf(buf, "%u\n", temperature * 1000);
 }
 
 

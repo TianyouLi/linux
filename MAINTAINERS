@@ -771,6 +771,11 @@ S:	Maintained
 F:	drivers/net/appletalk/
 F:	net/appletalk/
 
+APPLIED MICRO (APM) X-GENE DEVICE TREE SUPPORT
+M:	Duc Dang <dhdang@apm.com>
+S:	Supported
+F:	arch/arm64/boot/dts/apm/
+
 APPLIED MICRO (APM) X-GENE SOC ETHERNET DRIVER
 M:	Iyappan Subramanian <isubramanian@apm.com>
 M:	Keyur Chudgar <kchudgar@apm.com>
@@ -1941,6 +1946,19 @@ F:	include/linux/audit.h
 F:	include/uapi/linux/audit.h
 F:	kernel/audit*
 
+AUFS (advanced multi layered unification filesystem) FILESYSTEM
+M:	"J. R. Okajima" <hooanon05g@gmail.com>
+L:	linux-unionfs@vger.kernel.org
+L:	aufs-users@lists.sourceforge.net (members only)
+W:	http://aufs.sourceforge.net
+T:	git://github.com/sfjro/aufs4-linux.git
+S:	Supported
+F:	Documentation/filesystems/aufs/
+F:	Documentation/ABI/testing/debugfs-aufs
+F:	Documentation/ABI/testing/sysfs-aufs
+F:	fs/aufs/
+F:	include/uapi/linux/aufs_type.h
+
 AUXILIARY DISPLAY DRIVERS
 M:	Miguel Ojeda Sandonis <miguel.ojeda.sandonis@gmail.com>
 W:	http://miguelojeda.es/auxdisplay.htm
@@ -3105,6 +3123,15 @@ F:	include/uapi/misc/cxl.h
 F:	Documentation/powerpc/cxl.txt
 F:	Documentation/powerpc/cxl.txt
 F:	Documentation/ABI/testing/sysfs-class-cxl
+
+CXLFLASH (IBM Coherent Accelerator Processor Interface CAPI Flash) SCSI DRIVER
+M:	Manoj N. Kumar <manoj@linux.vnet.ibm.com>
+M:	Matthew R. Ochs <mrochs@linux.vnet.ibm.com>
+L:	linux-scsi@vger.kernel.org
+S:	Supported
+F:	drivers/scsi/cxlflash/
+F:	include/uapi/scsi/cxlflash_ioctls.h
+F:	Documentation/powerpc/cxlflash.txt
 
 STMMAC ETHERNET DRIVER
 M:	Giuseppe Cavallaro <peppe.cavallaro@st.com>
