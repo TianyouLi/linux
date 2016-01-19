@@ -1,10 +1,6 @@
 VERSION = 4
 PATCHLEVEL = 2
-<<<<<<< HEAD
 SUBLEVEL = 6
-=======
-SUBLEVEL = 0
->>>>>>> 64291f7db5bd8150a74ad2036f1037e6a0428df2
 EXTRAVERSION =
 NAME = Hurr durr I'ma sheep
 
