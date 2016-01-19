@@ -1,0 +1,14 @@
+Package: linux-headers-4.2.0-23
+Source: linux-lts-wily
+Version: 4.2.0-23.28~14.04.1
+Architecture: all
+Maintainer: Ubuntu Kernel Team <kernel-team@lists.ubuntu.com>
+Installed-Size: 66681
+Depends: coreutils | fileutils (>= 4.0)
+Section: devel
+Priority: optional
+Multi-Arch: foreign
+Description: Header files related to Linux kernel version 4.2.0
+ This package provides kernel header files for version 4.2.0, for sites
+ that want the latest kernel headers. Please read
+ /usr/share/doc/linux-lts-wily-headers-4.2.0-23/debian.README.gz for details
