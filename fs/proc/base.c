@@ -2239,6 +2239,39 @@ static const struct file_operations proc_timers_operations = {
 	.release	= seq_release_private,
 };
 
+static ssize_t proc_crstat_read(struct file *file, char __user *buf,
+				     size_t count, loff_t *ppos)
+{
+  static const char content[] = "Please read current process's C/R status from task_stat.";
+	BUG_ON(*ppos < 0);
+  return simple_read_from_buffer(buf, count, ppos, content, sizeof(content)/sizeof(char));
+}
+
+static long proc_crstat_ioctl(struct file* file,
+                             unsigned int cmd,
+                             unsigned long arg)
+{
+  switch(cmd) {
+  case 0: // request to put process into freeze state
+    printk(KERN_DEBUG "crstat ioctl command 0 invoked\n");
+    break;
+  case 1: // request to put process from freeze state into runable state
+    printk(KERN_DEBUG "crstat ioctl command 1 invoked\n");
+    break;
+  default:
+    return -ENOIOCTLCMD;
+  }
+  
+  return 0;
+}
+
+static const struct file_operations proc_crstat_operations = {
+	.read	= proc_crstat_read,
+	.llseek	= generic_file_llseek,
+  .unlocked_ioctl = proc_crstat_ioctl,
+};
+
+
 static int proc_pident_instantiate(struct inode *dir,
 	struct dentry *dentry, struct task_struct *task, const void *ptr)
 {
@@ -2853,6 +2886,7 @@ static const struct pid_entry tgid_base_stuff[] = {
 #endif
 #ifdef CONFIG_CHECKPOINT_RESTORE
 	REG("timers",	  S_IRUGO, proc_timers_operations),
+  REG("crstat",   S_IRUGO, proc_crstat_operations),
 #endif
 };
 
