@@ -87,6 +87,9 @@
 #include <linux/slab.h>
 #include <linux/flex_array.h>
 #include <linux/posix-timers.h>
+#ifdef CONFIG_QUICKLAKE
+#include <linux/quicklake.h>
+#endif
 #ifdef CONFIG_HARDWALL
 #include <asm/hardwall.h>
 #endif
@@ -2714,6 +2717,42 @@ static int proc_pid_personality(struct seq_file *m, struct pid_namespace *ns,
 	return err;
 }
 
+#ifdef CONFIG_QUICKLAKE
+static ssize_t proc_quicklake_read(struct file *file, char __user *buf,
+		size_t count, loff_t *ppos)
+{
+	return count;
+}
+
+static ssize_t proc_quicklake_write(struct file *file, const char __user *buf,
+		size_t count, loff_t *ppos)
+{
+	struct task_struct *task;
+	char local_buf[64];
+	int ret;
+
+	if (*ppos)
+		return count;
+	if (count > 64)
+		return -E2BIG;
+	ret = copy_from_user(local_buf, buf, count);
+	if (ret)
+		return -EBUSY;
+	task = get_proc_task(file_inode(file));
+	if (!task)
+		return -ESRCH;
+	ret = quicklake_request(task, local_buf, count);
+	put_task_struct(task);
+	return ret ? ret : count;
+}
+
+static const struct file_operations proc_quicklake_operations = {
+	.read		= proc_quicklake_read,
+	.write		= proc_quicklake_write,
+	.llseek		= default_llseek,
+};
+#endif
+
 /*
  * Thread groups
  */
@@ -2728,6 +2767,9 @@ static const struct pid_entry tgid_base_stuff[] = {
 	DIR("ns",	  S_IRUSR|S_IXUGO, proc_ns_dir_inode_operations, proc_ns_dir_operations),
 #ifdef CONFIG_NET
 	DIR("net",        S_IRUGO|S_IXUGO, proc_net_inode_operations, proc_net_operations),
+#endif
+#ifdef CONFIG_QUICKLAKE
+	REG("quicklake", S_IRUSR | S_IWUSR,	proc_quicklake_operations),
 #endif
 	REG("environ",    S_IRUSR, proc_environ_operations),
 	ONE("auxv",       S_IRUSR, proc_pid_auxv),
@@ -3384,3 +3426,4 @@ static const struct file_operations proc_task_operations = {
 	.iterate	= proc_task_readdir,
 	.llseek		= default_llseek,
 };
+

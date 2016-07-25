@@ -44,7 +44,9 @@
 #include <asm/siginfo.h>
 #include <asm/cacheflush.h>
 #include "audit.h"	/* audit_signal_info() */
-
+#ifdef CONFIG_QUICKLAKE
+#include <linux/quicklake.h>
+#endif
 /*
  * SLAB caches for signal bits.
  */
@@ -1825,7 +1827,6 @@ static void ptrace_stop(int exit_code, int why, int clear_code, siginfo_t *info)
 	__acquires(&current->sighand->siglock)
 {
 	bool gstop_done = false;
-
 	if (arch_ptrace_stop_needed(exit_code, info)) {
 		/*
 		 * The arch code has something special to do before a
@@ -1994,6 +1995,13 @@ static bool do_signal_stop(int signr)
 {
 	struct signal_struct *sig = current->signal;
 
+#ifdef CONFIG_QUICKLAKE
+	if (current->exit_state & TASK_QL) {
+		printk("Receive QL:%p %d %x\n", current, current->pid, current->exit_state);
+		ql_checkpoint();
+		return false;
+	}
+#endif
 	if (!(current->jobctl & JOBCTL_STOP_PENDING)) {
 		unsigned long gstop = JOBCTL_STOP_PENDING | JOBCTL_STOP_CONSUME;
 		struct task_struct *t;
@@ -2232,7 +2240,6 @@ relock:
 
 	for (;;) {
 		struct k_sigaction *ka;
-
 		if (unlikely(current->jobctl & JOBCTL_STOP_PENDING) &&
 		    do_signal_stop(0))
 			goto relock;
