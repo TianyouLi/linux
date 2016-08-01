@@ -44,9 +44,7 @@
 #include <asm/siginfo.h>
 #include <asm/cacheflush.h>
 #include "audit.h"	/* audit_signal_info() */
-#ifdef CONFIG_QUICKLAKE
 #include <linux/quicklake.h>
-#endif
 /*
  * SLAB caches for signal bits.
  */
@@ -1995,13 +1993,11 @@ static bool do_signal_stop(int signr)
 {
 	struct signal_struct *sig = current->signal;
 
-#ifdef CONFIG_QUICKLAKE
 	if (current->exit_state & TASK_QL) {
 		printk("Receive QL:%p %d %x\n", current, current->pid, current->exit_state);
 		ql_checkpoint();
 		return false;
 	}
-#endif
 	if (!(current->jobctl & JOBCTL_STOP_PENDING)) {
 		unsigned long gstop = JOBCTL_STOP_PENDING | JOBCTL_STOP_CONSUME;
 		struct task_struct *t;

@@ -3,7 +3,10 @@
 
 #include <linux/file.h>
 
-int quicklake_request(struct task_struct *, char *buf, size_t count);
+#define QL_DUMP		0
+#define QL_RESTORE	1
+
+int quicklake_request(struct task_struct *, int cmd);
 void ql_checkpoint(void);
 
 #endif

@@ -6,13 +6,8 @@
 #include <linux/string.h>
 #include <linux/quicklake.h>
 
-#define CMD_DUMP	"dump"
-#define CMD_RESTORE	"restore"
-
-#ifdef CONFIG_QUICKLAKE_OPT_O0
 #pragma GCC push_options
 #pragma GCC optimize ("O0")
-#endif
 
 void ql_checkpoint(void)
 {
@@ -43,16 +38,15 @@ static int ql_start_restore(struct task_struct *task)
 	return 0;
 }
 
-int quicklake_request(struct task_struct *task, char *buf, size_t count)
+int quicklake_request(struct task_struct *task, int cmd)
 {
-	if (!strncmp(buf, CMD_DUMP, sizeof(CMD_DUMP) - 1)) {
-		return ql_start_dump(task);	
-	} else if (!strncmp(buf, CMD_RESTORE, sizeof(CMD_RESTORE) - 1)) {
-		return ql_start_restore(task);
+	switch (cmd) {
+		case QL_DUMP:
+			return ql_start_dump(task);
+		case QL_RESTORE:
+			return ql_start_restore(task);
 	}
 	return -EINVAL;
 }
 
-#ifdef CONFIG_QUICKLAKE_OPT_O0
 #pragma GCC pop_options
-#endif
