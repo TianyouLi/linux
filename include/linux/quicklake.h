@@ -4,8 +4,8 @@
 #include <linux/file.h>
 #include <uapi/linux/quicklake.h>
 
-#define QL_DUMP		0
-#define QL_RESTORE	1
+#define QL_DUMP		2257
+#define QL_RESTORE	2261
 
 int quicklake_request(struct task_struct *, int cmd);
 void ql_checkpoint(void);

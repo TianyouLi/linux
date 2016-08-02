@@ -2240,9 +2240,20 @@ static const struct file_operations proc_timers_operations = {
 static ssize_t proc_crstat_read(struct file *file, char __user *buf,
 				     size_t count, loff_t *ppos)
 {
-  static const char content[] = "Please read current process's C/R status from task_stat.";
-	BUG_ON(*ppos < 0);
-  return simple_read_from_buffer(buf, count, ppos, content, sizeof(content)/sizeof(char));
+	struct task_struct *task = get_proc_task(file_inode(file));
+	int ret;
+	if (!task)
+		return -ESRCH;
+	switch (task->ql_state) {
+		case TASK_QL:
+			ret = simple_read_from_buffer(buf, count, ppos, "QL", sizeof("QL"));
+			break;
+		default:
+			ret = simple_read_from_buffer(buf, count, ppos, "Normal", sizeof("Normal"));
+			break;
+	}
+	put_task_struct(task);
+	return ret;
 }
 
 static long proc_crstat_ioctl(struct file* file,

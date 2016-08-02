@@ -18,9 +18,9 @@ void ql_checkpoint(void)
 
 static int ql_start_dump(struct task_struct *task)
 {
-	if (task->exit_state & TASK_QL)
+	if (task->ql_state & TASK_QL)
 		return -ENOEXEC;
-	task->exit_state = task->exit_state | TASK_QL;
+	task->ql_state = task->ql_state | TASK_QL;
 	send_sig_info(SIGSTOP, (struct siginfo *) 2, task);
 	set_tsk_thread_flag(task, TIF_SIGPENDING);
 	if (!wake_up_state(task, TASK_INTERRUPTIBLE)) {
@@ -31,7 +31,7 @@ static int ql_start_dump(struct task_struct *task)
 
 static int ql_start_restore(struct task_struct *task)
 {
-	task->exit_state = task->exit_state & ~TASK_QL;
+	task->ql_state = task->ql_state & ~TASK_QL;
 	if (!wake_up_state(task, TASK_UNINTERRUPTIBLE)) {
 		kick_process(task);
 	}
