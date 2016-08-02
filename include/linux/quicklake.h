@@ -2,6 +2,7 @@
 #define _LINUX_QUICKLAKE_H
 
 #include <linux/file.h>
+#include <uapi/linux/quicklake.h>
 
 #define QL_DUMP		0
 #define QL_RESTORE	1

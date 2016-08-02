@@ -2254,16 +2254,16 @@ static long proc_crstat_ioctl(struct file* file,
 	if (!task)
 		return -ESRCH;
   switch(cmd) {
-  case 2257: // request to put process into freeze state
+  case CRCMD_IOC_CHKPNT: // request to put process into freeze state
     printk(KERN_DEBUG "crstat ioctl command 0 invoked\n");
-	ret = quicklake_request(task, QL_DUMP);
+    ret = quicklake_request(task, QL_DUMP);
     break;
-  case 2261: // request to put process from freeze state into runable state
+  case CRCMD_IOC_RSTORE: // request to put process from freeze state into runable state
     printk(KERN_DEBUG "crstat ioctl command 1 invoked\n");
-	ret = quicklake_request(task, QL_RESTORE);
+    ret = quicklake_request(task, QL_RESTORE);
     break;
   default:
-	put_task_struct(task);
+    put_task_struct(task);
     return -ENOIOCTLCMD;
   }
   
