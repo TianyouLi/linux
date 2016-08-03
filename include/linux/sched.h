@@ -1381,6 +1381,7 @@ struct task_struct {
 	void *stack;
 	atomic_t usage;
 	unsigned int flags;	/* per process flags, defined below */
+	unsigned int ql_state;	/* quicklake state */
 	unsigned int ptrace;
 
 #ifdef CONFIG_SMP
