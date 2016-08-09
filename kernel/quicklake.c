@@ -31,6 +31,24 @@ static int ql_start_dump(struct task_struct *task)
 
 static int ql_start_restore(struct task_struct *task)
 {
+	struct sighand_struct *sighand = task->sighand;
+
+	/*
+	 * Drop all the signals that is sent to task
+	 * between checkpoint and restore
+	 */
+	spin_lock_irq(&sighand->siglock);
+	while (1) {
+		struct ksignal ksig;
+		int signr = dequeue_signal(task, &task->blocked, &ksig.info);
+		if (!signr)
+			break;
+		printk(KERN_INFO"Quicklake drop signal of task %d"
+				"(si_signo:%d si_errno:%d si_code:%d)\n", task->pid,
+				ksig.info.si_signo, ksig.info.si_errno, ksig.info.si_code);
+	}
+	spin_unlock_irq(&sighand->siglock);
+
 	task->ql_state = task->ql_state & ~TASK_QL;
 	if (!wake_up_state(task, TASK_UNINTERRUPTIBLE)) {
 		kick_process(task);
