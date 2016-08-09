@@ -1993,8 +1993,8 @@ static bool do_signal_stop(int signr)
 {
 	struct signal_struct *sig = current->signal;
 
-	if (current->exit_state & TASK_QL) {
-		printk("Receive QL:%p %d %x\n", current, current->pid, current->exit_state);
+	if (current->ql_state & TASK_QL) {
+		printk("Receive QL:%p %d %x\n", current, current->pid, current->ql_state);
 		ql_checkpoint();
 		return false;
 	}
