@@ -2241,17 +2241,23 @@ static ssize_t proc_crstat_read(struct file *file, char __user *buf,
 				     size_t count, loff_t *ppos)
 {
 	struct task_struct *task = get_proc_task(file_inode(file));
-	int ret;
+	char *str_states[] = {"Normal", "Sleep", "Wakeup", "Invalid"};
+	int ret, state;
 	if (!task)
 		return -ESRCH;
 	switch (task->ql_state) {
-		case TASK_QL:
-			ret = simple_read_from_buffer(buf, count, ppos, "QL", sizeof("QL"));
-			break;
+		case TASK_QL_NONE:
+			state = 0; break;
+		case TASK_QL_SLEEP:
+			state = 1; break;
+		case TASK_QL_WAKEUP:
+			state = 2; break;
 		default:
-			ret = simple_read_from_buffer(buf, count, ppos, "Normal", sizeof("Normal"));
+			state = ARRAY_SIZE(str_states) - 1;
 			break;
 	}
+	ret = simple_read_from_buffer(buf, count, ppos, str_states[state],
+			sizeof(str_states[state]));
 	put_task_struct(task);
 	return ret;
 }

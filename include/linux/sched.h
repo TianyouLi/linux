@@ -219,10 +219,9 @@ extern void proc_sched_set_task(struct task_struct *p);
 #define TASK_WAKING		256
 #define TASK_PARKED		512
 #define TASK_NOLOAD		1024
-#define	TASK_QL			2048
-#define TASK_STATE_MAX		4096
+#define TASK_STATE_MAX		2048
 
-#define TASK_STATE_TO_CHAR_STR "RSDTtXZxKWPNQ"
+#define TASK_STATE_TO_CHAR_STR "RSDTtXZxKWPN"
 
 extern char ___assert_task_state[1 - 2*!!(
 		sizeof(TASK_STATE_TO_CHAR_STR)-1 != ilog2(TASK_STATE_MAX)+1)];
@@ -3068,6 +3067,10 @@ static inline void signal_wake_up(struct task_struct *t, bool resume)
 static inline void ptrace_signal_wake_up(struct task_struct *t, bool resume)
 {
 	signal_wake_up_state(t, resume ? __TASK_TRACED : 0);
+}
+static inline void ptrace_signal_ql_wake_up(struct task_struct *t, bool resume)
+{
+	signal_wake_up_state(t, (resume ? __TASK_TRACED : 0) | TASK_UNINTERRUPTIBLE);
 }
 
 /*

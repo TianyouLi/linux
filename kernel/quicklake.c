@@ -18,9 +18,9 @@ void ql_checkpoint(void)
 
 static int ql_start_dump(struct task_struct *task)
 {
-	if (task->ql_state & TASK_QL)
+	if (task->ql_state & TASK_QL_SLEEP)
 		return -ENOEXEC;
-	task->ql_state = task->ql_state | TASK_QL;
+	task->ql_state = TASK_QL_SLEEP;
 	send_sig_info(SIGSTOP, (struct siginfo *) 2, task);
 	set_tsk_thread_flag(task, TIF_SIGPENDING);
 	if (!wake_up_state(task, TASK_INTERRUPTIBLE)) {
@@ -49,10 +49,7 @@ static int ql_start_restore(struct task_struct *task)
 	}
 	spin_unlock_irq(&sighand->siglock);
 
-	task->ql_state = task->ql_state & ~TASK_QL;
-	if (!wake_up_state(task, TASK_UNINTERRUPTIBLE)) {
-		kick_process(task);
-	}
+	task->ql_state = TASK_QL_WAKEUP;
 	return 0;
 }
 

@@ -26,6 +26,7 @@
 #include <linux/hw_breakpoint.h>
 #include <linux/cn_proc.h>
 #include <linux/compat.h>
+#include <linux/quicklake.h>
 
 
 /*
@@ -915,8 +916,13 @@ int ptrace_request(struct task_struct *child, long request,
 		 * STOP, this INTERRUPT should clear LISTEN and re-trap
 		 * tracee into STOP.
 		 */
-		if (likely(task_set_jobctl_pending(child, JOBCTL_TRAP_STOP)))
-			ptrace_signal_wake_up(child, child->jobctl & JOBCTL_LISTENING);
+		if (likely(task_set_jobctl_pending(child, JOBCTL_TRAP_STOP))) {
+			if (unlikely(child->ql_state & TASK_QL_WAKEUP)) {
+				ptrace_signal_ql_wake_up(child, child->jobctl & JOBCTL_LISTENING);
+				child->ql_state = TASK_QL_NONE;
+			} else
+				ptrace_signal_wake_up(child, child->jobctl & JOBCTL_LISTENING);
+		}
 
 		unlock_task_sighand(child, &flags);
 		ret = 0;
