@@ -53,6 +53,15 @@ static int ql_start_restore(struct task_struct *task)
 	return 0;
 }
 
+static int ql_resume(struct task_struct *task)
+{
+	task->ql_state = TASK_QL_NONE;
+	if (!wake_up_state(task, TASK_UNINTERRUPTIBLE)) {
+		kick_process(task);
+	}
+	return 0;
+}
+
 int quicklake_request(struct task_struct *task, int cmd)
 {
 	switch (cmd) {
@@ -60,6 +69,8 @@ int quicklake_request(struct task_struct *task, int cmd)
 			return ql_start_dump(task);
 		case QL_RESTORE:
 			return ql_start_restore(task);
+		case QL_RESUME:
+			return ql_resume(task);
 	}
 	return -EINVAL;
 }

@@ -2257,7 +2257,7 @@ static ssize_t proc_crstat_read(struct file *file, char __user *buf,
 			break;
 	}
 	ret = simple_read_from_buffer(buf, count, ppos, str_states[state],
-			sizeof(str_states[state]));
+			strlen(str_states[state]) + 1);
 	put_task_struct(task);
 	return ret;
 }
@@ -2278,6 +2278,9 @@ static long proc_crstat_ioctl(struct file* file,
   case CRCMD_IOC_RSTORE: // request to put process from freeze state into runable state
     printk(KERN_DEBUG "crstat ioctl command 1 invoked\n");
     ret = quicklake_request(task, QL_RESTORE);
+    break;
+  case CRCMD_IOC_RESUME:
+    ret = quicklake_request(task, QL_RESUME);
     break;
   default:
     put_task_struct(task);

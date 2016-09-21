@@ -6,6 +6,7 @@
 
 #define QL_DUMP		2257
 #define QL_RESTORE	2261
+#define QL_RESUME	5419
 
 #define TASK_QL_NONE		0
 #define TASK_QL_SLEEP		1
