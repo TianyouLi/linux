@@ -3,15 +3,13 @@
 #define _LINUX_PAGE_COUNTER_H
 
 #include <linux/atomic.h>
+#include <linux/cache.h>
 #include <linux/kernel.h>
 #include <asm/page.h>
 
 struct page_counter {
 	atomic_long_t usage;
-	unsigned long min;
-	unsigned long low;
-	unsigned long high;
-	unsigned long max;
+        CACHELINE_PADDING(_pad1_); // tli7 - patch1
 
 	/* effective memory.min and memory.min usage tracking */
 	unsigned long emin;
@@ -27,6 +25,13 @@ struct page_counter {
 	unsigned long watermark;
 	unsigned long failcnt;
 
+        CACHELINE_PADDING(_pad2_); //tli7 - patch1
+
+  	unsigned long min;
+	unsigned long low;
+	unsigned long high;
+	unsigned long max;
+
 	/*
 	 * 'parent' is placed here to be far from 'usage' to reduce
 	 * cache false sharing, as 'usage' is written mostly while
@@ -34,7 +39,7 @@ struct page_counter {
 	 * counting nature.
 	 */
 	struct page_counter *parent;
-};
+} ____cacheline_internodealigned_in_smp;
 
 #if BITS_PER_LONG == 32
 #define PAGE_COUNTER_MAX LONG_MAX
