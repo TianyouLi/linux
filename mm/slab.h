@@ -57,10 +57,10 @@ struct slab {
 #error "Unexpected slab allocator configured"
 #endif
 
-	atomic_t __page_refcount;
 #ifdef CONFIG_MEMCG
 	unsigned long memcg_data;
 #endif
+  	atomic_t __page_refcount;
 };
 
 #define SLAB_MATCH(pg, sl)						\

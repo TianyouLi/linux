@@ -201,13 +201,15 @@ struct page {
 		unsigned int page_type;
 	};
 
-	/* Usage count. *DO NOT USE DIRECTLY*. See page_ref.h */
-	atomic_t _refcount;
 
 #ifdef CONFIG_MEMCG
 	unsigned long memcg_data;
 #endif
 
+	/* Usage count. *DO NOT USE DIRECTLY*. See page_ref.h */
+	atomic_t _refcount;
+
+  
 	/*
 	 * On machines where all RAM is mapped into kernel address space,
 	 * we can simply calculate the virtual address. On machines with
@@ -274,10 +276,11 @@ struct folio {
 			pgoff_t index;
 			void *private;
 			atomic_t _mapcount;
-			atomic_t _refcount;
+
 #ifdef CONFIG_MEMCG
 			unsigned long memcg_data;
 #endif
+			atomic_t _refcount;
 	/* private: the union with struct page is transitional */
 		};
 		struct page page;
