@@ -1100,6 +1100,8 @@ static unsigned long __thp_get_unmapped_area(struct file *filp,
 	if (len_pad < len || (off + len_pad) < off)
 		return 0;
 
+	
+	
 	ret = mm_get_unmapped_area_vmflags(current->mm, filp, addr, len_pad,
 					   off >> PAGE_SHIFT, flags, vm_flags);
 
@@ -1122,6 +1124,19 @@ static unsigned long __thp_get_unmapped_area(struct file *filp,
 	if (test_bit(MMF_TOPDOWN, &current->mm->flags) && !off_sub)
 		return ret + size;
 
+	/*
+	 * ret += off_sub is the 'size aligned' address, add a fraction of to
+	 * avoid potential performance penalties for cache access.
+	 */
+	if (off_sub) {
+	        unsigned long off_count = off_sub >> PAGE_SHIFT;
+	        unsigned long map_count = current->mm->map_count;
+	        if (off_count > map_count) 
+	                off_sub -= (off_count % map_count) << PAGE_SHIFT;
+	        else
+	                off_sub -= (map_count % off_count) << PAGE_SHIFT;
+	}
+	
 	ret += off_sub;
 	return ret;
 }
