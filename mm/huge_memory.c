@@ -1131,10 +1131,12 @@ static unsigned long __thp_get_unmapped_area(struct file *filp,
 	if (off_sub) {
 	        unsigned long off_count = off_sub >> PAGE_SHIFT;
 	        unsigned long map_count = current->mm->map_count;
-	        if (off_count > map_count) 
-	                off_sub -= (off_count % map_count) << PAGE_SHIFT;
+		unsigned int remainder = 0;
+	        if (off_count > map_count)
+		        div_u64_rem(off_count, map_count, &remainder);
 	        else
-	                off_sub -= (map_count % off_count) << PAGE_SHIFT;
+		        div_u64_rem(map_count, off_count, &remainder);
+		off_sub -= remainder << PAGE_SHIFT;
 	}
 	
 	ret += off_sub;
