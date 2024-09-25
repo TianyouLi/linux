@@ -1125,17 +1125,15 @@ static unsigned long __thp_get_unmapped_area(struct file *filp,
 		return ret + size;
 
 	/*
-	 * ret += off_sub is the 'size aligned' address, add a fraction of to
+	 * ret += off_sub is the 'size aligned' address, add a fraction to
 	 * avoid potential performance penalties for cache access.
 	 */
-	if (off_sub) {
-	        unsigned long off_count = off_sub >> PAGE_SHIFT;
+	unsigned long len_sub = len & (size - 1);
+	if (off_sub && len_sub) {
+	        unsigned long range = min(len_sub, off_sub) >> PAGE_SHIFT ;
 	        unsigned long map_count = current->mm->map_count;
-		unsigned int remainder = 0;
-	        if (off_count > map_count)
-		        div_u64_rem(off_count, map_count, &remainder);
-	        else
-		        div_u64_rem(map_count, off_count, &remainder);
+		unsigned long remainder = max(range, map_count) % min(range, map_count);
+		
 		off_sub -= remainder << PAGE_SHIFT;
 	}
 	
