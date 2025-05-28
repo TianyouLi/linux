@@ -94,7 +94,7 @@ class FlameGraphCLI:
         return child
 
     def process_event(self, event):
-        # ignore events where the event type does not match
+        # ignore events where the event name does not match
         # the one specified by the user
         if self.args.event_name and event.get("ev_name") != self.args.event_name: 
             return
