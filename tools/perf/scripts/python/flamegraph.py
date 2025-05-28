@@ -96,7 +96,7 @@ class FlameGraphCLI:
     def process_event(self, event):
         # ignore events where the event type does not match
         # the one specified by the user
-        if self.args.event_type and event.get("ev_name") != self.args.event_type: 
+        if self.args.event_name and event.get("ev_name") != self.args.event_name: 
             return
         
         pid = event.get("sample", {}).get("pid", 0)
@@ -134,8 +134,8 @@ class FlameGraphCLI:
                 output = subprocess.check_output(["perf", "report", "--header-only"])
             
             result = output.decode("utf-8")
-            if self.args.event_type:
-                result += "\nFocused event type: " + self.args.event_type
+            if self.args.event_name:
+                result += "\nFocused event: " + self.args.event_name
             return result
         except Exception as err:  # pylint: disable=broad-except
             print("Error reading report header: {}".format(err), file=sys.stderr)
@@ -247,12 +247,11 @@ if __name__ == "__main__":
                         default=False,
                         action="store_true",
                         help="allow unprompted downloading of HTML template")
-    parser.add_argument("-e", "--event-type",
+    parser.add_argument("-e", "--event",
                         default="",
-                        action="store",
-                        dest="event_type",
+                        dest="event_name",
                         type=str,
-                        help="event type to generate flame graph for")
+                        help="specify the event to generate flamegraph for")
     
     cli_args = parser.parse_args()
     cli = FlameGraphCLI(cli_args)
