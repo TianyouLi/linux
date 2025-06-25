@@ -16,10 +16,10 @@ while [ $# -gt 0 ] ; do
 	elif [ $1 == "--unpack" ]; then
 		UNPACK=1
 		shift
-	elif [ $1 == "--buildids-blacklist" ]; then
-		BUILDIDS_BLACKLIST="$2"
-		if [ ! -e "$BUILDIDS_BLACKLIST" ]; then
-			echo "Provided buildids blacklist file $BUILDIDS_BLACKLIST does not exist"
+	elif [ $1 == "--exclude-buildids" ]; then
+		EXCLUDE_BUILDIDS="$2"
+		if [ ! -e "$EXCLUDE_BUILDIDS" ]; then
+			echo "Provided exclude-buildids file $EXCLUDE_BUILDIDS does not exist"
 			exit 1
 		fi
 		shift 2
@@ -94,25 +94,25 @@ fi
 BUILDIDS=$(mktemp /tmp/perf-archive-buildids.XXXXXX)
 
 #
-# BUILDIDS_BLACKLIST is an optional file that contains build-ids to be excluded from the
+# EXCLUDE_BUILDIDS is an optional file that contains build-ids to be excluded from the
 # archive. It is a list of build-ids, one per line, without any leading or trailing spaces.
-# If the file is empty, all build-ids will be included in the archive. To create a blacklist
-# file, you can use the following command:
-# 	perf buildid-list -i perf.data --with-hits | grep -v "^ " > buildids_blacklist.txt
+# If the file is empty, all build-ids will be included in the archive. To create a exclude-
+# buildids file, you can use the following command:
+# 	perf buildid-list -i perf.data --with-hits | grep -v "^ " > exclude_buildids.txt
 # You can edit the file to remove the lines that you want to keep in the archive, then:
-# 	perf archive --buildids-blacklist buildids_blacklist.txt
+# 	perf archive --exclude-buildids exclude_buildids.txt
 #
-if [ ! -s $BUILDIDS_BLACKLIST ]; then
-	perf buildid-list -i $PERF_DATA --with-hits | grep -v "^ " > $BUILDIDS
-	if [ ! -s $BUILDIDS ] ; then
-		echo "perf archive: no build-ids found"
+if [ -s "$EXCLUDE_BUILDIDS" ]; then
+	perf buildid-list -i $PERF_DATA --with-hits | grep -v "^ " | grep -Fv -f $EXCLUDE_BUILDIDS > $BUILDIDS
+	if [ ! -s "$BUILDIDS" ] ; then
+		echo "perf archive: no build-ids found after applying exclude-buildids file"
 		rm $BUILDIDS || true
 		exit 1
 	fi
 else
-	perf buildid-list -i $PERF_DATA --with-hits | grep -v "^ " | grep -Fv -f $BUILDIDS_BLACKLIST > $BUILDIDS
-	if [ ! -s $BUILDIDS ] ; then
-		echo "perf archive: no build-ids found after applying blacklist"
+	perf buildid-list -i $PERF_DATA --with-hits | grep -v "^ " > $BUILDIDS
+	if [ ! -s "$BUILDIDS" ] ; then
+		echo "perf archive: no build-ids found"
 		rm $BUILDIDS || true
 		exit 1
 	fi
