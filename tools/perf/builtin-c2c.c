@@ -45,6 +45,8 @@
 #include "pmus.h"
 #include "string2.h"
 #include "util/util.h"
+#include "util/symbol.h"
+#include "util/annotate.h"
 
 struct c2c_hists {
 	struct hists		hists;
@@ -62,6 +64,7 @@ struct compute_stats {
 
 struct c2c_hist_entry {
 	struct c2c_hists	*hists;
+	struct evsel 		*evsel;
 	struct c2c_stats	 stats;
 	unsigned long		*cpuset;
 	unsigned long		*nodeset;
@@ -223,6 +226,12 @@ he__get_c2c_hists(struct hist_entry *he,
 	return hists;
 }
 
+static void c2c_he__set_evsel(struct c2c_hist_entry *c2c_he,
+				struct evsel *evsel) 
+{
+	c2c_he->evsel = evsel;
+}
+
 static void c2c_he__set_cpu(struct c2c_hist_entry *c2c_he,
 			    struct perf_sample *sample)
 {
@@ -327,9 +336,11 @@ static int process_sample_event(const struct perf_tool *tool __maybe_unused,
 		goto free_mi;
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
+
 	c2c_add_stats(&c2c_he->stats, &stats);
 	c2c_add_stats(&c2c_hists->stats, &stats);
 
+	c2c_he__set_evsel(c2c_he,evsel);
 	c2c_he__set_cpu(c2c_he, sample);
 	c2c_he__set_node(c2c_he, sample);
 
@@ -361,12 +372,14 @@ static int process_sample_event(const struct perf_tool *tool __maybe_unused,
 			goto free_mi;
 
 		c2c_he = container_of(he, struct c2c_hist_entry, he);
+
 		c2c_add_stats(&c2c_he->stats, &stats);
 		c2c_add_stats(&c2c_hists->stats, &stats);
 		c2c_add_stats(&c2c_he->node_stats[node], &stats);
 
 		compute_stats(c2c_he, &stats, sample->weight);
 
+		c2c_he__set_evsel(c2c_he, evsel);
 		c2c_he__set_cpu(c2c_he, sample);
 		c2c_he__set_node(c2c_he, sample);
 
@@ -2598,6 +2611,17 @@ c2c_cacheline_browser__new(struct hists *hists, struct hist_entry *he)
 	return browser;
 }
 
+static int perf_c2c__toggle_annotation(struct hist_entry *he)
+{
+	struct c2c_hist_entry *c2c_he;
+	struct map_symbol *ms = &he->ms;
+	struct symbol *sym = ms->sym;
+
+	symbol__hists(sym, 1);
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	return hist_entry__tui_annotate(he, c2c_he->evsel, NULL, he->ip);
+}
+
 static int perf_c2c__browse_cacheline(struct hist_entry *he)
 {
 	struct c2c_hist_entry *c2c_he;
@@ -2609,6 +2633,7 @@ static int perf_c2c__browse_cacheline(struct hist_entry *he)
 	" ENTER         Toggle callchains (if present) \n"
 	" n             Toggle Node details info \n"
 	" s             Toggle full length of symbol and source line columns \n"
+	" a                             Toggle annotation view \n"
 	" q             Return back to cacheline list \n";
 
 	if (!he)
@@ -2642,6 +2667,9 @@ static int perf_c2c__browse_cacheline(struct hist_entry *he)
 		case 'n':
 			c2c.node_info = (c2c.node_info + 1) % 3;
 			setup_nodes_header();
+			break;
+		case 'a':
+			perf_c2c__toggle_annotation(browser->he_selection);
 			break;
 		case 'q':
 			goto out;
@@ -3117,6 +3145,39 @@ static int perf_c2c__report(int argc, const char **argv)
 	if (err)
 		goto out_mem2node;
 
+	if (c2c.use_stdio)
+		use_browser = 0;
+	else
+		use_browser = 1;
+
+	annotation_options__init();
+
+	/*
+	* Only in the TUI browser we are doing integrated annotation,
+	* so don't allocate extra space that won't be used in the stdio
+	* implementation.
+	*/
+	if (use_browser == 1) {
+        int ret = symbol__annotation_init();
+        if (ret < 0)
+                goto out_mem2node;
+        /*
+         * For searching by name on the "Browse map details".
+         * providing it only in verbose mode not to bloat too
+         * much struct symbol.
+         */
+        if (verbose > 0) {
+                /*
+                 * XXX: Need to provide a less kludgy way to ask for
+                 * more space per symbol, the u32 is for the index on
+                 * the ui browser.
+                 * See symbol__browser_index.
+                 */
+                symbol_conf.priv_size += sizeof(u32);
+        }
+        annotation_config__init();
+	}
+
 	if (symbol__init(&session->header.env) < 0)
 		goto out_mem2node;
 
@@ -3125,11 +3186,6 @@ static int perf_c2c__report(int argc, const char **argv)
 		pr_debug("No pipe support at the moment.\n");
 		goto out_mem2node;
 	}
-
-	if (c2c.use_stdio)
-		use_browser = 0;
-	else
-		use_browser = 1;
 
 	setup_browser(false);
 
@@ -3201,6 +3257,7 @@ out_mem2node:
 out_session:
 	perf_session__delete(session);
 out:
+	annotation_options__exit();
 	return err;
 }
 
