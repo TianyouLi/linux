@@ -3132,15 +3132,6 @@ static int perf_c2c__report(int argc, const char **argv)
 	if (err)
 		goto out_mem2node;
 
-	if (symbol__init(&session->header.env) < 0)
-		goto out_mem2node;
-
-	/* No pipe support at the moment. */
-	if (perf_data__is_pipe(session->data)) {
-		pr_debug("No pipe support at the moment.\n");
-		goto out_mem2node;
-	}
-
 	if (c2c.use_stdio)
 		use_browser = 0;
 	else
@@ -3172,6 +3163,15 @@ static int perf_c2c__report(int argc, const char **argv)
                 symbol_conf.priv_size += sizeof(u32);
         }
         annotation_config__init();
+	}
+
+	if (symbol__init(&session->header.env) < 0)
+		goto out_mem2node;
+
+	/* No pipe support at the moment. */
+	if (perf_data__is_pipe(session->data)) {
+		pr_debug("No pipe support at the moment.\n");
+		goto out_mem2node;
 	}
 
 	setup_browser(false);
