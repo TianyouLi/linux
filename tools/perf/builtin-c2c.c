@@ -45,6 +45,8 @@
 #include "pmus.h"
 #include "string2.h"
 #include "util/util.h"
+#include "util/symbol.h"
+#include "util/annotate.h"
 
 struct c2c_hists {
 	struct hists		hists;
@@ -2598,6 +2600,15 @@ c2c_cacheline_browser__new(struct hists *hists, struct hist_entry *he)
 	return browser;
 }
 
+static int perf_c2c__toggle_annotation(struct hist_browser *browser)
+{
+       struct hist_entry *he;
+
+       he = browser->he_selection;
+
+       return hist_entry__tui_annotate(he, NULL, browser->hbt);
+}
+
 static int perf_c2c__browse_cacheline(struct hist_entry *he)
 {
 	struct c2c_hist_entry *c2c_he;
@@ -2609,6 +2620,7 @@ static int perf_c2c__browse_cacheline(struct hist_entry *he)
 	" ENTER         Toggle callchains (if present) \n"
 	" n             Toggle Node details info \n"
 	" s             Toggle full length of symbol and source line columns \n"
+	" a                             Toggle annotation view \n"
 	" q             Return back to cacheline list \n";
 
 	if (!he)
@@ -2642,6 +2654,9 @@ static int perf_c2c__browse_cacheline(struct hist_entry *he)
 		case 'n':
 			c2c.node_info = (c2c.node_info + 1) % 3;
 			setup_nodes_header();
+			break;
+		case 'a':
+			perf_c2c__toggle_annotation(browser);
 			break;
 		case 'q':
 			goto out;
@@ -3131,6 +3146,34 @@ static int perf_c2c__report(int argc, const char **argv)
 	else
 		use_browser = 1;
 
+	annotation_options__init();
+
+	/*
+	* Only in the TUI browser we are doing integrated annotation,
+	* so don't allocate extra space that won't be used in the stdio
+	* implementation.
+	*/
+	if (use_browser == 1) {
+        int ret = symbol__annotation_init();
+        if (ret < 0)
+                goto out_mem2node;
+        /*
+         * For searching by name on the "Browse map details".
+         * providing it only in verbose mode not to bloat too
+         * much struct symbol.
+         */
+        if (verbose > 0) {
+                /*
+                 * XXX: Need to provide a less kludgy way to ask for
+                 * more space per symbol, the u32 is for the index on
+                 * the ui browser.
+                 * See symbol__browser_index.
+                 */
+                symbol_conf.priv_size += sizeof(u32);
+        }
+        annotation_config__init();
+	}
+
 	setup_browser(false);
 
 	err = perf_session__process_events(session);
@@ -3201,6 +3244,7 @@ out_mem2node:
 out_session:
 	perf_session__delete(session);
 out:
+	annotation_options__exit();
 	return err;
 }
 
