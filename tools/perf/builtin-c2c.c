@@ -2619,7 +2619,7 @@ static int perf_c2c__toggle_annotation(struct hist_entry *he)
 
 	symbol__hists(sym, 1);
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
-	return hist_entry__tui_annotate(he, c2c_he->evsel, NULL);
+	return hist_entry__tui_annotate(he, c2c_he->evsel, NULL, he->ip);
 }
 
 static int perf_c2c__browse_cacheline(struct hist_entry *he)
