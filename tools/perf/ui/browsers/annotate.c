@@ -483,7 +483,7 @@ static bool annotate_browser__callq(struct annotate_browser *browser,
 	target_ms.map = ms->map;
 	target_ms.sym = dl->ops.target.sym;
 	annotation__unlock(notes);
-	symbol__tui_annotate(&target_ms, evsel, hbt, 0);
+	symbol__tui_annotate(&target_ms, evsel, hbt, NO_INITIAL_IP);
 	sym_title(ms->sym, ms->map, title, sizeof(title), annotate_opts.percent_type);
 	ui_browser__show_title(&browser->b, title);
 	return true;
@@ -1019,7 +1019,14 @@ int symbol__tui_annotate(struct map_symbol *ms, struct evsel *evsel,
 		}
 	}
 
-	if (init_ip != 0) {
+	/*
+	 * If init_ip is set, it means that there should be a line
+	 * intentionally selected, not based on the percentages
+	 * which caculated by the event sampling. In this case, we
+	 * convey this information into the browser selection, where
+	 * the selection in other cases should be empty.
+	*/
+	if (init_ip != NO_INITIAL_IP) {
 	 	dl = find_disasm_line(sym, init_ip, false);
 		browser.selection = &dl->al;
 	}
