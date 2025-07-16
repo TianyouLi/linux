@@ -226,6 +226,12 @@ he__get_c2c_hists(struct hist_entry *he,
 	return hists;
 }
 
+static void c2c_he__set_evsel(struct c2c_hist_entry *c2c_he,
+				struct evsel *evsel) 
+{
+	c2c_he->evsel = evsel;
+}
+
 static void c2c_he__set_cpu(struct c2c_hist_entry *c2c_he,
 			    struct perf_sample *sample)
 {
@@ -289,8 +295,6 @@ static int process_sample_event(const struct perf_tool *tool __maybe_unused,
 	struct addr_location al;
 	struct mem_info *mi, *mi_dup;
 	struct callchain_cursor *cursor;
-	struct map_symbol *ms;
-	struct symbol *sym;
 	int ret;
 
 	addr_location__init(&al);
@@ -331,17 +335,12 @@ static int process_sample_event(const struct perf_tool *tool __maybe_unused,
 	if (he == NULL)
 		goto free_mi;
 
-	ms = &he->ms;
-	sym = ms->sym;
-
-	symbol__hists(sym, 1);
-
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
 
-	c2c_he->evsel = evsel;
 	c2c_add_stats(&c2c_he->stats, &stats);
 	c2c_add_stats(&c2c_hists->stats, &stats);
 
+	c2c_he__set_evsel(c2c_he,evsel);
 	c2c_he__set_cpu(c2c_he, sample);
 	c2c_he__set_node(c2c_he, sample);
 
@@ -373,12 +372,14 @@ static int process_sample_event(const struct perf_tool *tool __maybe_unused,
 			goto free_mi;
 
 		c2c_he = container_of(he, struct c2c_hist_entry, he);
+
 		c2c_add_stats(&c2c_he->stats, &stats);
 		c2c_add_stats(&c2c_hists->stats, &stats);
 		c2c_add_stats(&c2c_he->node_stats[node], &stats);
 
 		compute_stats(c2c_he, &stats, sample->weight);
 
+		c2c_he__set_evsel(c2c_he, evsel);
 		c2c_he__set_cpu(c2c_he, sample);
 		c2c_he__set_node(c2c_he, sample);
 
@@ -2610,11 +2611,15 @@ c2c_cacheline_browser__new(struct hists *hists, struct hist_entry *he)
 	return browser;
 }
 
-static int perf_c2c__toggle_annotation(struct hist_browser *browser, struct evsel* evsel)
+static int perf_c2c__toggle_annotation(struct hist_entry *he)
 {
-       struct hist_entry *he = browser->he_selection;
+	struct c2c_hist_entry *c2c_he;
+	struct map_symbol *ms = &he->ms;
+	struct symbol *sym = ms->sym;
 
-       return hist_entry__tui_annotate(he, evsel, browser->hbt);
+	symbol__hists(sym, 1);
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	return hist_entry__tui_annotate(he, c2c_he->evsel, NULL);
 }
 
 static int perf_c2c__browse_cacheline(struct hist_entry *he)
@@ -2664,7 +2669,7 @@ static int perf_c2c__browse_cacheline(struct hist_entry *he)
 			setup_nodes_header();
 			break;
 		case 'a':
-			perf_c2c__toggle_annotation(browser, c2c_he->evsel);
+			perf_c2c__toggle_annotation(browser->he_selection);
 			break;
 		case 'q':
 			goto out;
