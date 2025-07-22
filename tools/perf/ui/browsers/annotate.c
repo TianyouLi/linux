@@ -557,7 +557,7 @@ static bool annotate_browser__callq(struct annotate_browser *browser,
 	target_ms.map = ms->map;
 	target_ms.sym = dl->ops.target.sym;
 	annotation__unlock(notes);
-	symbol__tui_annotate(&target_ms, evsel, hbt);
+	symbol__tui_annotate(&target_ms, evsel, hbt, NO_INITIAL_IP);
 	sym_title(ms->sym, ms->map, title, sizeof(title), annotate_opts.percent_type);
 	ui_browser__show_title(&browser->b, title);
 	return true;
@@ -805,6 +805,7 @@ static int annotate_browser__run(struct annotate_browser *browser,
 	const char *help = "Press 'h' for help on key bindings";
 	int delay_secs = hbt ? hbt->refresh : 0;
 	char *br_cntr_text = NULL;
+	u64 init_ip = NO_INITIAL_IP;
 	char title[256];
 	int key;
 
@@ -813,6 +814,12 @@ static int annotate_browser__run(struct annotate_browser *browser,
 		return -1;
 
 	annotate_browser__calc_percent(browser, evsel);
+
+	if (browser->curr_hot == NULL && browser->selection) {
+		init_ip = sym->start + browser->selection->offset;
+		disasm_rb_tree__insert(browser, browser->selection);
+		browser->curr_hot = rb_last(&browser->entries);
+	}
 
 	if (browser->curr_hot) {
 		annotate_browser__set_rb_top(browser, browser->curr_hot);
@@ -911,6 +918,17 @@ static int annotate_browser__run(struct annotate_browser *browser,
 				ui_helpline__puts(help);
 			annotate__scnprintf_title(hists, title, sizeof(title));
 			annotate_browser__show(&browser->b, title, help);
+			/* Previous RB tree may not valid, need refresh according to new entries*/
+			if (init_ip != NO_INITIAL_IP) {
+				struct disasm_line *dl = find_disasm_line(sym, init_ip, true);
+				browser->curr_hot = NULL;
+				browser->entries.rb_node = NULL;
+				if (dl != NULL) {
+					disasm_rb_tree__insert(browser, &dl->al);
+					browser->curr_hot = rb_last(&browser->entries);
+				}
+				nd = browser->curr_hot;
+			}
 			continue;
 		case 'o':
 			annotate_opts.use_offset = !annotate_opts.use_offset;
@@ -1033,27 +1051,28 @@ out:
 }
 
 int map_symbol__tui_annotate(struct map_symbol *ms, struct evsel *evsel,
-			     struct hist_browser_timer *hbt)
+			     struct hist_browser_timer *hbt, u64 init_ip)
 {
-	return symbol__tui_annotate(ms, evsel, hbt);
+	return symbol__tui_annotate(ms, evsel, hbt, init_ip);
 }
 
 int hist_entry__tui_annotate(struct hist_entry *he, struct evsel *evsel,
-			     struct hist_browser_timer *hbt)
+			     struct hist_browser_timer *hbt, u64 init_ip)
 {
 	/* reset abort key so that it can get Ctrl-C as a key */
 	SLang_reset_tty();
 	SLang_init_tty(0, 0, 0);
 	SLtty_set_suspend_state(true);
 
-	return map_symbol__tui_annotate(&he->ms, evsel, hbt);
+	return map_symbol__tui_annotate(&he->ms, evsel, hbt, init_ip);
 }
 
 int symbol__tui_annotate(struct map_symbol *ms, struct evsel *evsel,
-			 struct hist_browser_timer *hbt)
+			 struct hist_browser_timer *hbt, u64 init_ip)
 {
 	struct symbol *sym = ms->sym;
 	struct annotation *notes = symbol__annotation(sym);
+	struct disasm_line *dl = NULL;
 	struct annotate_browser browser = {
 		.b = {
 			.refresh = annotate_browser__refresh,
@@ -1091,6 +1110,18 @@ int symbol__tui_annotate(struct map_symbol *ms, struct evsel *evsel,
 			if (!annotation__has_source(notes))
 				ui__warning("Annotation has no source code.");
 		}
+	}
+
+	/*
+	 * If init_ip is set, it means that there should be a line
+	 * intentionally selected, not based on the percentages
+	 * which caculated by the event sampling. In this case, we
+	 * convey this information into the browser selection, where
+	 * the selection in other cases should be empty.
+	 */
+	if (init_ip != NO_INITIAL_IP) {
+		dl = find_disasm_line(sym, init_ip, false);
+		browser.selection = &dl->al;
 	}
 
 	ui_helpline__push("Press ESC to exit");
