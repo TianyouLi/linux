@@ -752,6 +752,11 @@ void move_pfn_range_to_zone(struct zone *zone, unsigned long start_pfn,
 {
 	struct pglist_data *pgdat = zone->zone_pgdat;
 	int nid = pgdat->node_id;
+	bool old_contiguous = zone->contiguous;
+	unsigned long old_start_pfn = zone->zone_start_pfn;
+	unsigned long old_end_pfn = zone_end_pfn(zone);
+	unsigned long old_absent_pages = zone->spanned_pages - zone->present_pages;
+	unsigned long new_filled_pages = 0;
 
 	clear_zone_contiguous(zone);
 
@@ -782,6 +787,39 @@ void move_pfn_range_to_zone(struct zone *zone, unsigned long start_pfn,
 	memmap_init_range(nr_pages, nid, zone_idx(zone), start_pfn, 0,
 			 MEMINIT_HOTPLUG, altmap, migratetype,
 			 isolate_pageblock);
+
+	/*
+	 * If the moved pfn range not intersects with the old zone span,
+	 * the contiguous property is surely false.
+	 */
+	if ((start_pfn + nr_pages) < old_start_pfn || start_pfn > old_end_pfn) {
+		zone->contiguous = false;
+		return;
+	}
+
+	/*
+	 * If the moved pfn range adjacent with the old zone span,
+	 * we need to check the left side or right side range
+	 */
+	if ((start_pfn + nr_pages) == old_start_pfn || start_pfn == old_end_pfn) {
+		zone->contiguous = old_contiguous &&
+			check_zone_contiguous(zone, start_pfn, nr_pages);
+		return;
+	}
+
+	/*
+	 * If old zone's hole larger than the new filled pages, the contiguous
+	 * property is surely false.
+	 */
+	new_filled_pages = start_pfn + nr_pages - old_start_pfn;
+	if (start_pfn > old_start_pfn)
+		new_filled_pages -= start_pfn - old_start_pfn;
+	if (start_pfn + nr_pages > old_end_pfn)
+		new_filled_pages -= start_pfn + nr_pages - old_end_pfn;
+	if (new_filled_pages < old_absent_pages) {
+		zone->contiguous = false;
+		return;
+	}
 
 	set_zone_contiguous(zone);
 }
