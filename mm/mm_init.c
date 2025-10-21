@@ -2342,12 +2342,25 @@ bool check_zone_contiguous(struct zone *zone,
 	for (; block_start_pfn < end_pfn;
 			block_start_pfn = block_end_pfn,
 			 block_end_pfn += pageblock_nr_pages) {
+		unsigned long block_start_pfn_1, block_end_pfn_1;
+		bool prefetched = false;
 
 		block_end_pfn = min(block_end_pfn, end_pfn);
+
+		block_start_pfn_1 = min(block_end_pfn, end_pfn);
+		block_end_pfn_1 = min(block_start_pfn_1 + pageblock_nr_pages,
+					end_pfn);
+
+		prefetched = pfn_to_online_page(block_start_pfn_1) != NULL
+				&& pfn_to_page(block_end_pfn_1 - 1) != NULL;
 
 		if (!__pageblock_pfn_to_page(block_start_pfn,
 					     block_end_pfn, zone))
 			return false;
+
+		if (!prefetched)
+			return false;
+
 		cond_resched();
 	}
 
