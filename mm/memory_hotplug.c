@@ -544,6 +544,27 @@ static void update_pgdat_span(struct pglist_data *pgdat)
 	pgdat->node_spanned_pages = node_end_pfn - node_start_pfn;
 }
 
+static enum zone_contig_state __meminit zone_contig_state_after_shrinking(
+		struct zone *zone, unsigned long start_pfn, unsigned long nr_pages)
+{
+	const unsigned long end_pfn = start_pfn + nr_pages;
+	enum zone_contig_state result = ZONE_CONTIG_MAYBE;
+
+	/*
+	 * If the removed pfn range inside the original zone span, the contiguous
+	 * property is surely false.
+	 * If the removed pfn range is at the beginning or end of the
+	 * original zone span, the contiguous property is preserved when
+	 * the original zone is contiguous.
+	 */
+	if (start_pfn > zone->zone_start_pfn && end_pfn < zone_end_pfn(zone))
+		result = ZONE_CONTIG_NO;
+	else if (start_pfn == zone->zone_start_pfn || end_pfn == zone_end_pfn(zone))
+		result = zone->contiguous ? ZONE_CONTIG_YES : ZONE_CONTIG_MAYBE;
+
+	return result;
+}
+
 void remove_pfn_range_from_zone(struct zone *zone,
 				      unsigned long start_pfn,
 				      unsigned long nr_pages)
@@ -551,6 +572,7 @@ void remove_pfn_range_from_zone(struct zone *zone,
 	const unsigned long end_pfn = start_pfn + nr_pages;
 	struct pglist_data *pgdat = zone->zone_pgdat;
 	unsigned long pfn, cur_nr_pages;
+	enum zone_contig_state contiguous_state = ZONE_CONTIG_MAYBE;
 
 	/* Poison struct pages because they are now uninitialized again. */
 	for (pfn = start_pfn; pfn < end_pfn; pfn += cur_nr_pages) {
@@ -571,12 +593,13 @@ void remove_pfn_range_from_zone(struct zone *zone,
 	if (zone_is_zone_device(zone))
 		return;
 
+	contiguous_state = zone_contig_state_after_shrinking(zone, start_pfn, nr_pages);
 	clear_zone_contiguous(zone);
 
 	shrink_zone_span(zone, start_pfn, start_pfn + nr_pages);
 	update_pgdat_span(pgdat);
 
-	set_zone_contiguous(zone);
+	set_zone_contiguous(zone, contiguous_state);
 }
 
 /**
@@ -736,6 +759,33 @@ static inline void section_taint_zone_device(unsigned long pfn)
 }
 #endif
 
+static enum zone_contig_state __meminit zone_contig_state_after_growing(
+		struct zone *zone, unsigned long start_pfn, unsigned long nr_pages)
+{
+	const unsigned long end_pfn = start_pfn + nr_pages;
+	enum zone_contig_state result = ZONE_CONTIG_MAYBE;
+
+	/*
+	 * If the moved pfn range does not intersect with the original zone span,
+	 * the contiguous property is surely false.
+	 * If the moved pfn range is adjacent to the original zone span, given
+	 * the moved pfn range's contiguous property is always true, the zone's
+	 * contiguous property inherited from the original value.
+	 * If the original zone's hole larger than the moved pages in the range,
+	 * the contiguous property is surely false.
+	 */
+	if (zone_is_empty(zone))
+		result = ZONE_CONTIG_YES;
+	else if (end_pfn < zone->zone_start_pfn || start_pfn > zone_end_pfn(zone))
+		result = ZONE_CONTIG_NO;
+	else if (end_pfn == zone->zone_start_pfn || start_pfn == zone_end_pfn(zone))
+		result = zone->contiguous ? ZONE_CONTIG_YES : ZONE_CONTIG_NO;
+	else if (nr_pages < (zone->spanned_pages - zone->present_pages))
+		result = ZONE_CONTIG_NO;
+
+	return result;
+}
+
 /*
  * Associate the pfn range with the given zone, initializing the memmaps
  * and resizing the pgdat/zone data to span the added pages. After this
@@ -752,7 +802,8 @@ void move_pfn_range_to_zone(struct zone *zone, unsigned long start_pfn,
 {
 	struct pglist_data *pgdat = zone->zone_pgdat;
 	int nid = pgdat->node_id;
-
+	const enum zone_contig_state contiguous_state =
+		zone_contig_state_after_growing(zone, start_pfn, nr_pages);
 	clear_zone_contiguous(zone);
 
 	if (zone_is_empty(zone))
@@ -783,7 +834,7 @@ void move_pfn_range_to_zone(struct zone *zone, unsigned long start_pfn,
 			 MEMINIT_HOTPLUG, altmap, migratetype,
 			 isolate_pageblock);
 
-	set_zone_contiguous(zone);
+	set_zone_contiguous(zone, contiguous_state);
 }
 
 struct auto_movable_stats {
