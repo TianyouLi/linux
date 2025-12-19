@@ -544,6 +544,25 @@ static void update_pgdat_span(struct pglist_data *pgdat)
 	pgdat->node_spanned_pages = node_end_pfn - node_start_pfn;
 }
 
+static enum zone_contig_state zone_contig_state_after_shrinking(struct zone *zone,
+				unsigned long start_pfn, unsigned long nr_pages)
+{
+	const unsigned long end_pfn = start_pfn + nr_pages;
+
+	/*
+	 * If we cut a hole into the zone span, then the zone is
+	 * certainly not contiguous.
+	 */
+	if (start_pfn > zone->zone_start_pfn && end_pfn < zone_end_pfn(zone))
+		return ZONE_CONTIG_NO;
+
+	/* Removing from the start/end of the zone will not change anything. */
+	if (start_pfn == zone->zone_start_pfn || end_pfn == zone_end_pfn(zone))
+		return zone->contiguous ? ZONE_CONTIG_YES : ZONE_CONTIG_MAYBE;
+
+	return ZONE_CONTIG_MAYBE;
+}
+
 void remove_pfn_range_from_zone(struct zone *zone,
 				      unsigned long start_pfn,
 				      unsigned long nr_pages)
@@ -551,6 +570,7 @@ void remove_pfn_range_from_zone(struct zone *zone,
 	const unsigned long end_pfn = start_pfn + nr_pages;
 	struct pglist_data *pgdat = zone->zone_pgdat;
 	unsigned long pfn, cur_nr_pages;
+	enum zone_contig_state new_contiguous_state;
 
 	/* Poison struct pages because they are now uninitialized again. */
 	for (pfn = start_pfn; pfn < end_pfn; pfn += cur_nr_pages) {
@@ -571,12 +591,14 @@ void remove_pfn_range_from_zone(struct zone *zone,
 	if (zone_is_zone_device(zone))
 		return;
 
+	new_contiguous_state = zone_contig_state_after_shrinking(zone, start_pfn,
+								 nr_pages);
 	clear_zone_contiguous(zone);
 
 	shrink_zone_span(zone, start_pfn, start_pfn + nr_pages);
 	update_pgdat_span(pgdat);
 
-	set_zone_contiguous(zone);
+	set_zone_contiguous(zone, new_contiguous_state);
 }
 
 /**
@@ -735,6 +757,32 @@ static inline void section_taint_zone_device(unsigned long pfn)
 {
 }
 #endif
+
+static enum zone_contig_state zone_contig_state_after_growing(struct zone *zone,
+				unsigned long start_pfn, unsigned long nr_pages)
+{
+	const unsigned long end_pfn = start_pfn + nr_pages;
+
+	if (zone_is_empty(zone))
+		return ZONE_CONTIG_YES;
+
+	/*
+	 * If the moved pfn range does not intersect with the original zone span
+	 * the zone is surely not contiguous.
+	 */
+	if (end_pfn < zone->zone_start_pfn || start_pfn > zone_end_pfn(zone))
+		return ZONE_CONTIG_NO;
+
+	/* Adding to the start/end of the zone will not change anything. */
+	if (end_pfn == zone->zone_start_pfn || start_pfn == zone_end_pfn(zone))
+		return zone->contiguous ? ZONE_CONTIG_YES : ZONE_CONTIG_NO;
+
+	/* If we cannot fill the hole, the zone stays not contiguous. */
+	if (nr_pages < (zone->spanned_pages - zone->present_pages))
+		return ZONE_CONTIG_NO;
+
+	return ZONE_CONTIG_MAYBE;
+}
 
 /*
  * Associate the pfn range with the given zone, initializing the memmaps
@@ -1113,6 +1161,13 @@ int mhp_init_memmap_on_memory(unsigned long pfn, unsigned long nr_pages,
 	if (nr_pages >= PAGES_PER_SECTION)
 	        online_mem_sections(pfn, ALIGN_DOWN(end_pfn, PAGES_PER_SECTION));
 
+	/*
+	 * If all memory sections online, check whether the whole zone is
+	 * contiguous.
+	 */
+	if (IS_ALIGNED(end_pfn, PAGES_PER_SECTION))
+		set_zone_contiguous(zone, ZONE_CONTIG_MAYBE);
+
 	return ret;
 }
 
@@ -1152,6 +1207,7 @@ int online_pages(unsigned long pfn, unsigned long nr_pages,
 	const int nid = zone_to_nid(zone);
 	int need_zonelists_rebuild = 0;
 	unsigned long flags;
+	enum zone_contig_state new_contiguous_state;
 	int ret;
 
 	/*
@@ -1165,6 +1221,11 @@ int online_pages(unsigned long pfn, unsigned long nr_pages,
 			 !IS_ALIGNED(pfn + nr_pages, PAGES_PER_SECTION)))
 		return -EINVAL;
 
+	/*
+	 * Calculate the new zone contig state before move_pfn_range_to_zone()
+	 * sets the zone temporarily to non-contiguous.
+	 */
+	new_contiguous_state = zone_contig_state_after_growing(zone, pfn, nr_pages);
 
 	/* associate pfn range with the zone */
 	move_pfn_range_to_zone(zone, pfn, nr_pages, NULL, MIGRATE_MOVABLE,
@@ -1208,7 +1269,7 @@ int online_pages(unsigned long pfn, unsigned long nr_pages,
 	 * Now that the ranges are indicated as online, check whether the whole
 	 * zone is contiguous.
 	 */
-	set_zone_contiguous(zone);
+	set_zone_contiguous(zone, new_contiguous_state);
 
 	adjust_present_page_count(pfn_to_page(pfn), group, nr_pages);
 
