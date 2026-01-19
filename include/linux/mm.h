@@ -4377,6 +4377,7 @@ static inline void num_poisoned_pages_sub(unsigned long pfn, long i)
 #if defined(CONFIG_MEMORY_FAILURE) && defined(CONFIG_MEMORY_HOTPLUG)
 extern void memblk_nr_poison_inc(unsigned long pfn);
 extern void memblk_nr_poison_sub(unsigned long pfn, long i);
+extern unsigned long memblk_nr_poison(struct memory_block *mem);
 #else
 static inline void memblk_nr_poison_inc(unsigned long pfn)
 {
@@ -4384,6 +4385,11 @@ static inline void memblk_nr_poison_inc(unsigned long pfn)
 
 static inline void memblk_nr_poison_sub(unsigned long pfn, long i)
 {
+}
+
+static inline unsigned long memblk_nr_poison(struct memory_block *mem)
+{
+	return 0;
 }
 #endif
 

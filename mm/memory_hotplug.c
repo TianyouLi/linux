@@ -1085,7 +1085,7 @@ void adjust_present_page_count(struct page *page, struct memory_group *group,
 		group->present_kernel_pages += nr_pages;
 }
 
-int mhp_init_memmap_on_memory(unsigned long pfn, unsigned long nr_pages,
+static int mhp_init_memmap_on_memory(unsigned long pfn, unsigned long nr_pages,
 			      struct zone *zone)
 {
 	unsigned long end_pfn = pfn + nr_pages;
@@ -1116,7 +1116,7 @@ int mhp_init_memmap_on_memory(unsigned long pfn, unsigned long nr_pages,
 	return ret;
 }
 
-void mhp_deinit_memmap_on_memory(unsigned long pfn, unsigned long nr_pages)
+static void mhp_deinit_memmap_on_memory(unsigned long pfn, unsigned long nr_pages)
 {
 	unsigned long end_pfn = pfn + nr_pages;
 
@@ -1139,7 +1139,7 @@ void mhp_deinit_memmap_on_memory(unsigned long pfn, unsigned long nr_pages)
 /*
  * Must be called with mem_hotplug_lock in write mode.
  */
-int online_pages(unsigned long pfn, unsigned long nr_pages,
+static int online_pages(unsigned long pfn, unsigned long nr_pages,
 		       struct zone *zone, struct memory_group *group)
 {
 	struct memory_notify mem_arg = {
@@ -1251,6 +1251,74 @@ failed_addition:
 	if (node_arg.nid != NUMA_NO_NODE)
 		node_notify(NODE_CANCEL_ADDING_FIRST_MEMORY, &node_arg);
 	remove_pfn_range_from_zone(zone, pfn, nr_pages);
+	return ret;
+}
+
+static int online_memory_block_pages(unsigned long start_pfn, unsigned long nr_pages,
+			unsigned long nr_vmemmap_pages, struct zone *zone,
+			struct memory_group *group)
+{
+	int ret;
+
+	if (nr_vmemmap_pages) {
+		ret = mhp_init_memmap_on_memory(start_pfn, nr_vmemmap_pages, zone);
+		if (ret)
+			return ret;
+	}
+
+	ret = online_pages(start_pfn + nr_vmemmap_pages,
+			   nr_pages - nr_vmemmap_pages, zone, group);
+	if (ret) {
+		if (nr_vmemmap_pages)
+			mhp_deinit_memmap_on_memory(start_pfn, nr_vmemmap_pages);
+		return ret;
+	}
+
+	/*
+	 * Account once onlining succeeded. If the zone was unpopulated, it is
+	 * now already properly populated.
+	 */
+	if (nr_vmemmap_pages)
+		adjust_present_page_count(pfn_to_page(start_pfn), group,
+					  nr_vmemmap_pages);
+
+	return ret;
+}
+
+/*
+ * Must acquire mem_hotplug_lock in write mode.
+ */
+int mhp_block_online(struct memory_block *mem)
+{
+	unsigned long start_pfn = section_nr_to_pfn(mem->start_section_nr);
+	unsigned long nr_pages = PAGES_PER_SECTION * sections_per_block;
+	unsigned long nr_vmemmap_pages = 0;
+	struct zone *zone;
+	int ret;
+
+	if (memblk_nr_poison(mem))
+		return -EHWPOISON;
+
+	zone = zone_for_pfn_range(mem->online_type, mem->nid, mem->group,
+				  start_pfn, nr_pages);
+
+	/*
+	 * Although vmemmap pages have a different lifecycle than the pages
+	 * they describe (they remain until the memory is unplugged), doing
+	 * their initialization and accounting at memory onlining/offlining
+	 * stage helps to keep accounting easier to follow - e.g vmemmaps
+	 * belong to the same zone as the memory they backed.
+	 */
+	if (mem->altmap)
+		nr_vmemmap_pages = mem->altmap->free;
+
+	mem_hotplug_begin();
+	ret = online_memory_block_pages(start_pfn, nr_pages, nr_vmemmap_pages,
+					zone, mem->group);
+	if (!ret)
+		mem->zone = zone;
+	mem_hotplug_done();
+
 	return ret;
 }
 
@@ -1896,7 +1964,7 @@ static int count_system_ram_pages_cb(unsigned long start_pfn,
 /*
  * Must be called with mem_hotplug_lock in write mode.
  */
-int offline_pages(unsigned long start_pfn, unsigned long nr_pages,
+static int offline_pages(unsigned long start_pfn, unsigned long nr_pages,
 			struct zone *zone, struct memory_group *group)
 {
 	unsigned long pfn, managed_pages, system_ram_pages = 0;
@@ -2098,6 +2166,62 @@ failed_removal:
 		 (unsigned long long) start_pfn << PAGE_SHIFT,
 		 ((unsigned long long) end_pfn << PAGE_SHIFT) - 1,
 		 reason);
+	return ret;
+}
+
+static int offline_memory_block_pages(unsigned long start_pfn,
+		unsigned long nr_pages, unsigned long nr_vmemmap_pages,
+		struct zone *zone, struct memory_group *group)
+{
+	int ret;
+
+	if (nr_vmemmap_pages)
+		adjust_present_page_count(pfn_to_page(start_pfn), group,
+					  -nr_vmemmap_pages);
+
+	ret = offline_pages(start_pfn + nr_vmemmap_pages,
+			    nr_pages - nr_vmemmap_pages, zone, group);
+	if (ret) {
+		/* offline_pages() failed. Account back. */
+		if (nr_vmemmap_pages)
+			adjust_present_page_count(pfn_to_page(start_pfn),
+						  group, nr_vmemmap_pages);
+		return ret;
+	}
+
+	if (nr_vmemmap_pages)
+		mhp_deinit_memmap_on_memory(start_pfn, nr_vmemmap_pages);
+
+	return ret;
+}
+
+/*
+ * Must acquire mem_hotplug_lock in write mode.
+ */
+int mhp_block_offline(struct memory_block *mem)
+{
+	unsigned long start_pfn = section_nr_to_pfn(mem->start_section_nr);
+	unsigned long nr_pages = PAGES_PER_SECTION * sections_per_block;
+	unsigned long nr_vmemmap_pages = 0;
+	int ret;
+
+	if (!mem->zone)
+		return -EINVAL;
+
+	/*
+	 * Unaccount before offlining, such that unpopulated zone and kthreads
+	 * can properly be torn down in offline_pages().
+	 */
+	if (mem->altmap)
+		nr_vmemmap_pages = mem->altmap->free;
+
+	mem_hotplug_begin();
+	ret = offline_memory_block_pages(start_pfn, nr_pages, nr_vmemmap_pages,
+					 mem->zone, mem->group);
+	if (!ret)
+		mem->zone = NULL;
+	mem_hotplug_done();
+
 	return ret;
 }
 

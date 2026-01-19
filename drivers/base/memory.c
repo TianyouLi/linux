@@ -209,115 +209,6 @@ int memory_notify(enum memory_block_state state, void *v)
 	return blocking_notifier_call_chain(&memory_chain, state, v);
 }
 
-#if defined(CONFIG_MEMORY_FAILURE) && defined(CONFIG_MEMORY_HOTPLUG)
-static unsigned long memblk_nr_poison(struct memory_block *mem);
-#else
-static inline unsigned long memblk_nr_poison(struct memory_block *mem)
-{
-	return 0;
-}
-#endif
-
-/*
- * Must acquire mem_hotplug_lock in write mode.
- */
-static int memory_block_online(struct memory_block *mem)
-{
-	unsigned long start_pfn = section_nr_to_pfn(mem->start_section_nr);
-	unsigned long nr_pages = PAGES_PER_SECTION * sections_per_block;
-	unsigned long nr_vmemmap_pages = 0;
-	struct zone *zone;
-	int ret;
-
-	if (memblk_nr_poison(mem))
-		return -EHWPOISON;
-
-	zone = zone_for_pfn_range(mem->online_type, mem->nid, mem->group,
-				  start_pfn, nr_pages);
-
-	/*
-	 * Although vmemmap pages have a different lifecycle than the pages
-	 * they describe (they remain until the memory is unplugged), doing
-	 * their initialization and accounting at memory onlining/offlining
-	 * stage helps to keep accounting easier to follow - e.g vmemmaps
-	 * belong to the same zone as the memory they backed.
-	 */
-	if (mem->altmap)
-		nr_vmemmap_pages = mem->altmap->free;
-
-	mem_hotplug_begin();
-	if (nr_vmemmap_pages) {
-		ret = mhp_init_memmap_on_memory(start_pfn, nr_vmemmap_pages, zone);
-		if (ret)
-			goto out;
-	}
-
-	ret = online_pages(start_pfn + nr_vmemmap_pages,
-			   nr_pages - nr_vmemmap_pages, zone, mem->group);
-	if (ret) {
-		if (nr_vmemmap_pages)
-			mhp_deinit_memmap_on_memory(start_pfn, nr_vmemmap_pages);
-		goto out;
-	}
-
-	/*
-	 * Account once onlining succeeded. If the zone was unpopulated, it is
-	 * now already properly populated.
-	 */
-	if (nr_vmemmap_pages)
-		adjust_present_page_count(pfn_to_page(start_pfn), mem->group,
-					  nr_vmemmap_pages);
-
-	mem->zone = zone;
-out:
-	mem_hotplug_done();
-	return ret;
-}
-
-/*
- * Must acquire mem_hotplug_lock in write mode.
- */
-static int memory_block_offline(struct memory_block *mem)
-{
-	unsigned long start_pfn = section_nr_to_pfn(mem->start_section_nr);
-	unsigned long nr_pages = PAGES_PER_SECTION * sections_per_block;
-	unsigned long nr_vmemmap_pages = 0;
-	int ret;
-
-	if (!mem->zone)
-		return -EINVAL;
-
-	/*
-	 * Unaccount before offlining, such that unpopulated zone and kthreads
-	 * can properly be torn down in offline_pages().
-	 */
-	if (mem->altmap)
-		nr_vmemmap_pages = mem->altmap->free;
-
-	mem_hotplug_begin();
-	if (nr_vmemmap_pages)
-		adjust_present_page_count(pfn_to_page(start_pfn), mem->group,
-					  -nr_vmemmap_pages);
-
-	ret = offline_pages(start_pfn + nr_vmemmap_pages,
-			    nr_pages - nr_vmemmap_pages, mem->zone, mem->group);
-	if (ret) {
-		/* offline_pages() failed. Account back. */
-		if (nr_vmemmap_pages)
-			adjust_present_page_count(pfn_to_page(start_pfn),
-						  mem->group, nr_vmemmap_pages);
-		goto out;
-	}
-
-	if (nr_vmemmap_pages)
-		mhp_deinit_memmap_on_memory(start_pfn, nr_vmemmap_pages);
-
-	mem->zone = NULL;
-out:
-	mem_hotplug_done();
-	return ret;
-}
-
 /*
  * MEMORY_HOTPLUG depends on SPARSEMEM in mm/Kconfig, so it is
  * OK to have direct references to sparsemem variables in here.
@@ -329,10 +220,10 @@ memory_block_action(struct memory_block *mem, unsigned long action)
 
 	switch (action) {
 	case MEM_ONLINE:
-		ret = memory_block_online(mem);
+		ret = mhp_block_online(mem);
 		break;
 	case MEM_OFFLINE:
-		ret = memory_block_offline(mem);
+		ret = mhp_block_offline(mem);
 		break;
 	default:
 		WARN(1, KERN_WARNING "%s(%ld, %ld) unknown action: "
@@ -1243,7 +1134,7 @@ void memblk_nr_poison_sub(unsigned long pfn, long i)
 		atomic_long_sub(i, &mem->nr_hwpoison);
 }
 
-static unsigned long memblk_nr_poison(struct memory_block *mem)
+unsigned long memblk_nr_poison(struct memory_block *mem)
 {
 	return atomic_long_read(&mem->nr_hwpoison);
 }

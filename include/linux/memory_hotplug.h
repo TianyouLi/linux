@@ -12,6 +12,7 @@ struct zone;
 struct pglist_data;
 struct mem_section;
 struct memory_group;
+struct memory_block;
 struct resource;
 struct vmem_altmap;
 struct dev_pagemap;
@@ -106,11 +107,7 @@ extern void adjust_present_page_count(struct page *page,
 				      struct memory_group *group,
 				      long nr_pages);
 /* VM interface that may be used by firmware interface */
-extern int mhp_init_memmap_on_memory(unsigned long pfn, unsigned long nr_pages,
-				     struct zone *zone);
-extern void mhp_deinit_memmap_on_memory(unsigned long pfn, unsigned long nr_pages);
-extern int online_pages(unsigned long pfn, unsigned long nr_pages,
-			struct zone *zone, struct memory_group *group);
+extern int mhp_block_online(struct memory_block *block);
 extern unsigned long __offline_isolated_pages(unsigned long start_pfn,
 		unsigned long end_pfn);
 
@@ -261,8 +258,7 @@ static inline void pgdat_resize_init(struct pglist_data *pgdat) {}
 #ifdef CONFIG_MEMORY_HOTREMOVE
 
 extern void try_offline_node(int nid);
-extern int offline_pages(unsigned long start_pfn, unsigned long nr_pages,
-			 struct zone *zone, struct memory_group *group);
+extern int mhp_block_offline(struct memory_block *block);
 extern int remove_memory(u64 start, u64 size);
 extern void __remove_memory(u64 start, u64 size);
 extern int offline_and_remove_memory(u64 start, u64 size);
@@ -270,8 +266,7 @@ extern int offline_and_remove_memory(u64 start, u64 size);
 #else
 static inline void try_offline_node(int nid) {}
 
-static inline int offline_pages(unsigned long start_pfn, unsigned long nr_pages,
-				struct zone *zone, struct memory_group *group)
+static inline int mhp_block_offline(struct memory_block *block)
 {
 	return -EINVAL;
 }
